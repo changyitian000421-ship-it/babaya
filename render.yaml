@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: shengdong-training-system
+    runtime: python
+    plan: free
+    buildCommand: "python -m py_compile server.py"
+    startCommand: "python server.py"
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATA_DIR
+        value: /tmp/shengdong-data

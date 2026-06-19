@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="声动语言艺术培训管理系统" />
+    <title>声动 · 教培管理系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div>
+            <strong>声动</strong>
+            <small>语言艺术教育</small>
+          </div>
+        </div>
+
+        <nav class="nav-list" aria-label="主导航">
+          <button class="nav-item active" data-page="dashboard">
+            <svg><use href="#icon-grid"></use></svg><span>工作台</span>
+          </button>
+          <button class="nav-item" data-page="students">
+            <svg><use href="#icon-users"></use></svg><span>学员管理</span>
+          </button>
+          <button class="nav-item" data-page="catalog">
+            <svg><use href="#icon-layers"></use></svg><span>课程与班级</span>
+          </button>
+          <button class="nav-item" data-page="schedule">
+            <svg><use href="#icon-calendar"></use></svg><span>班级课表</span>
+          </button>
+          <button class="nav-item" data-page="leads">
+            <svg><use href="#icon-spark"></use></svg><span>招生跟进</span>
+            <i>6</i>
+          </button>
+          <button class="nav-item" data-page="hours">
+            <svg><use href="#icon-clock"></use></svg><span>课时管理</span>
+          </button>
+          <button class="nav-item" data-page="teaching">
+            <svg><use href="#icon-book"></use></svg><span>教学中心</span>
+          </button>
+          <div class="nav-divider"></div>
+          <button class="nav-item" data-page="settings">
+            <svg><use href="#icon-settings"></use></svg><span>系统设置</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-card">
+          <div class="sidebar-card-icon"><svg><use href="#icon-star"></use></svg></div>
+          <strong>本月招生目标</strong>
+          <div class="goal-line"><span>18 / 25 人</span><b>72%</b></div>
+          <div class="progress"><span style="width: 72%"></span></div>
+        </div>
+
+        <div class="profile">
+          <div class="avatar avatar-manager">林</div>
+          <div><strong>林知夏</strong><small>校区管理员</small></div>
+          <button aria-label="更多"><svg><use href="#icon-more"></use></svg></button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <button class="mobile-menu" id="mobileMenu" aria-label="打开菜单">
+              <svg><use href="#icon-menu"></use></svg>
+            </button>
+            <div class="eyebrow" id="pageEyebrow">总览</div>
+            <h1 id="pageTitle">下午好，林老师</h1>
+          </div>
+          <div class="top-actions">
+            <label class="global-search">
+              <svg><use href="#icon-search"></use></svg>
+              <input id="globalSearch" type="search" placeholder="搜索学员、班级或手机号" />
+              <kbd>⌘ K</kbd>
+            </label>
+            <button class="icon-button notification" aria-label="消息通知">
+              <svg><use href="#icon-bell"></use></svg><span></span>
+            </button>
+            <button class="primary-button" id="quickAdd" aria-label="新增学员">
+              <svg><use href="#icon-plus"></use></svg><span>新增学员</span>
+            </button>
+          </div>
+        </header>
+
+        <section id="pageContent" class="page-content"></section>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="modalBackdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-header">
+          <div><small>建立学员档案</small><h2 id="modalTitle">新增学员</h2></div>
+          <button class="icon-button" id="closeModal" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
+        </div>
+        <form id="studentForm">
+          <input type="hidden" name="id" />
+          <div class="form-grid">
+            <label><span>学员姓名</span><input name="name" required placeholder="请输入姓名" /></label>
+            <label><span>年龄</span><input name="age" required type="number" min="3" max="18" placeholder="请输入年龄" /></label>
+            <label><span>家长姓名</span><input name="parent" required placeholder="请输入家长姓名" /></label>
+            <label><span>联系电话</span><input name="phone" required type="tel" placeholder="请输入手机号" /></label>
+            <label class="full"><span>意向课程</span>
+              <select name="course">
+                <option>少儿主持基础班</option><option>朗诵表达进阶班</option>
+                <option>舞台表演启蒙班</option><option>演讲与口才一对一</option>
+              </select>
+            </label>
+            <label class="edit-only"><span>剩余课时</span><input name="hours" type="number" min="0" step="0.5" value="0" /></label>
+            <label class="edit-only"><span>学员状态</span>
+              <select name="status">
+                <option>在读</option><option>待续费</option><option>请假中</option>
+                <option>待分班</option><option>停课</option>
+              </select>
+            </label>
+            <label class="full"><span>备注</span><textarea name="note" rows="3" placeholder="性格特点、学习目标等"></textarea></label>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="secondary-button" id="cancelModal">取消</button>
+            <button type="submit" class="primary-button" id="saveStudent">保存学员</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="managementBackdrop" hidden>
+      <div class="modal management-modal" role="dialog" aria-modal="true" aria-labelledby="managementTitle">
+        <div class="modal-header">
+          <div><small id="managementEyebrow">课程与班级</small><h2 id="managementTitle">新增课程</h2></div>
+          <button class="icon-button" id="closeManagement" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
+        </div>
+        <form id="managementForm">
+          <input type="hidden" name="id" />
+          <input type="hidden" name="type" />
+          <div class="form-grid" id="managementFields"></div>
+          <div class="modal-footer">
+            <button type="button" class="secondary-button" id="cancelManagement">取消</button>
+            <button type="submit" class="primary-button" id="saveManagement">保存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="rosterBackdrop" hidden>
+      <div class="modal roster-modal" role="dialog" aria-modal="true" aria-labelledby="rosterTitle">
+        <div class="modal-header">
+          <div><small>班级花名册</small><h2 id="rosterTitle">学员分班</h2></div>
+          <button class="icon-button" id="closeRoster" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
+        </div>
+        <div id="rosterContent"></div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"><svg><use href="#icon-check"></use></svg><span></span></div>
+
+    <svg class="svg-sprite" aria-hidden="true">
+      <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
+      <symbol id="icon-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+      <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></symbol>
+      <symbol id="icon-spark" viewBox="0 0 24 24"><path d="m12 3-1.4 4.6L6 9l4.6 1.4L12 15l1.4-4.6L18 9l-4.6-1.4L12 3Z"/><path d="m5 15-.7 2.3L2 18l2.3.7L5 21l.7-2.3L8 18l-2.3-.7L5 15ZM19 13l-.7 2.3-2.3.7 2.3.7L19 19l.7-2.3 2.3-.7-2.3-.7L19 13Z"/></symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="icon-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.36.7.65.96.3.27.68.42 1.08.43H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z"/></symbol>
+      <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+      <symbol id="icon-star" viewBox="0 0 24 24"><path d="m12 2.5 3 6.1 6.7 1-4.9 4.7 1.2 6.7-6-3.2L6 21l1.2-6.7-4.9-4.7 6.7-1 3-6.1Z"/></symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+      <symbol id="icon-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M14 21h-4"/></symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+      <symbol id="icon-trend" viewBox="0 0 24 24"><path d="m3 17 6-6 4 4 8-9"/><path d="M15 6h6v6"/></symbol>
+      <symbol id="icon-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.85.29 1.73.5 2.63.62A2 2 0 0 1 22 16.92Z"/></symbol>
+      <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+      <symbol id="icon-filter" viewBox="0 0 24 24"><path d="M4 5h16M7 12h10M10 19h4"/></symbol>
+      <symbol id="icon-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 15H6L5 6M10 11v6M14 11v6"/></symbol>
+      <symbol id="icon-wallet" viewBox="0 0 24 24"><path d="M20 7V5a2 2 0 0 0-2-2H5a3 3 0 0 0 0 6h16v11H5a3 3 0 0 1-3-3V6"/><path d="M16 13h2"/></symbol>
+      <symbol id="icon-layers" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></symbol>
+    </svg>
+    <script src="./app.js"></script>
+  </body>
+</html>

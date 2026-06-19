@@ -1,0 +1,94 @@
+# 声动教培系统 MVP
+
+语言艺术培训机构管理端第一版，覆盖：
+
+- 经营工作台
+- SQLite 本地持久化数据库
+- 学员档案、搜索、新增、编辑和删除
+- 课程产品新增、编辑、状态和价格管理
+- 教师名单新增、编辑和删除
+- 教室名称、编号和容量新增、编辑和删除
+- 班级创建、教师教室配置、班额校验
+- 班级花名册与学员分班
+- 班级课表
+- 招生跟进看板
+- 课时流水
+- 桌面端与移动端适配
+
+## 本地运行
+
+### 推荐方式
+
+在 macOS 中双击 `start.command`，系统会自动启动服务并打开浏览器。
+
+### 命令行方式
+
+项目不需要安装第三方依赖，运行：
+
+```bash
+python3 server.py
+```
+
+然后访问 `http://127.0.0.1:4173`。
+
+请通过这个地址使用系统，不要直接打开 `index.html`。终端窗口关闭后，服务会停止；已保存的数据不会丢失。
+
+## 文件
+
+- `index.html`：页面结构与图标
+- `styles.css`：视觉系统与响应式布局
+- `app.js`：页面交互与 API 调用
+- `server.py`：静态页面服务、数据接口与业务校验
+- `data/shengdong.db`：自动创建的 SQLite 数据库
+- `start.command`：macOS 快速启动脚本
+- `render.yaml`：Render 部署蓝图
+
+## 部署到 GitHub 和 Render
+
+### 1. 推送到 GitHub
+
+在 GitHub 新建一个空仓库，然后把仓库地址设为本项目的远程地址：
+
+```bash
+git remote add origin git@github.com:你的用户名/你的仓库名.git
+git push -u origin main
+```
+
+如果使用 HTTPS 地址，也可以把第二行前的远程地址改成 GitHub 页面提供的 HTTPS 仓库地址。
+
+### 2. 在 Render 部署
+
+Render 可以直接读取本项目的 `render.yaml`：
+
+1. 登录 Render，选择 `New +` -> `Blueprint`。
+2. 连接刚推送到 GitHub 的仓库。
+3. Render 会识别 `render.yaml`，创建名为 `shengdong-training-system` 的 Web Service。
+4. 部署完成后访问 Render 提供的公开网址。
+
+也可以手动创建 Web Service：
+
+- Runtime：`Python`
+- Build Command：`python -m py_compile server.py`
+- Start Command：`python server.py`
+- Environment Variables：
+  - `HOST=0.0.0.0`
+  - `DATA_DIR=/tmp/shengdong-data`
+
+当前 Render 免费部署适合演示和试用，SQLite 数据会保存在 Render 的临时文件系统中，服务重启或重新部署后可能丢失。正式运营建议改用 Render Disk 或 PostgreSQL。
+
+## 当前数据接口
+
+- `GET /api/health`：服务健康检查
+- `GET /api/dashboard`：工作台实时统计
+- `GET /api/students`：获取或搜索学员
+- `POST /api/students`：新增学员
+- `PUT /api/students/:id`：修改学员
+- `DELETE /api/students/:id`：删除学员
+- `GET /api/catalog`：课程、班级、教师、教室与花名册
+- `POST/PUT/DELETE /api/courses`：课程产品管理
+- `POST/PUT/DELETE /api/classes`：班级管理
+- `POST/PUT/DELETE /api/teachers`：教师名单管理
+- `POST/PUT/DELETE /api/rooms`：教室资料管理
+- `POST/DELETE /api/classes/:id/students`：学员分班管理
+
+当前数据库适合单校区试用。后续部署到云端时，可以保持前端接口不变，将 SQLite 迁移到 MySQL 或 PostgreSQL。
