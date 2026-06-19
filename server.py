@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import mimetypes
 import os
+import re
 import secrets
 import sqlite3
 from datetime import datetime, timedelta
@@ -24,6 +25,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(ROOT / "data"))).expanduser()
 DATABASE = Path(os.environ.get("DATABASE_PATH", str(DATA_DIR / "shengdong.db"))).expanduser()
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+DATABASE_KIND = "postgres" if DATABASE_URL else "sqlite"
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "4173"))
 
@@ -99,7 +102,113 @@ SEED_CLASSES = [
 ]
 
 
-def connect() -> sqlite3.Connection:
+class DictRow(dict):
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
+class PostgresCursor:
+    def __init__(self, cursor, lastrowid: int | None = None):
+        self.cursor = cursor
+        self.lastrowid = lastrowid
+
+    @property
+    def rowcount(self) -> int:
+        return self.cursor.rowcount
+
+    def fetchone(self):
+        row = self.cursor.fetchone()
+        return DictRow(row) if row is not None else None
+
+    def fetchall(self) -> list[DictRow]:
+        return [DictRow(row) for row in self.cursor.fetchall()]
+
+
+class PostgresConnection:
+    dialect = "postgres"
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        self.connection.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return self.connection.__exit__(exc_type, exc, traceback)
+
+    def execute(self, sql: str, params: tuple | dict = ()):
+        translated = translate_postgres_sql(sql)
+        returning_id = should_return_id(translated)
+        if returning_id:
+            translated = f"{translated.rstrip().rstrip(';')} RETURNING id"
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(translated, params)
+            lastrowid = None
+            if returning_id:
+                row = cursor.fetchone()
+                lastrowid = row["id"] if row else None
+            return PostgresCursor(cursor, lastrowid)
+        except Exception as exc:
+            if exc.__class__.__name__ in {"IntegrityError", "UniqueViolation", "ForeignKeyViolation"}:
+                raise sqlite3.IntegrityError(str(exc)) from exc
+            raise
+
+    def executemany(self, sql: str, params: list[tuple] | list[dict]):
+        translated = translate_postgres_sql(sql)
+        cursor = self.connection.cursor()
+        try:
+            cursor.executemany(translated, params)
+            return PostgresCursor(cursor)
+        except Exception as exc:
+            if exc.__class__.__name__ in {"IntegrityError", "UniqueViolation", "ForeignKeyViolation"}:
+                raise sqlite3.IntegrityError(str(exc)) from exc
+            raise
+
+    def executescript(self, script: str) -> None:
+        for statement in split_sql_script(script):
+            self.execute(statement)
+
+
+def split_sql_script(script: str) -> list[str]:
+    return [statement.strip() for statement in script.split(";") if statement.strip()]
+
+
+def translate_postgres_sql(sql: str) -> str:
+    translated = sql.strip()
+    if re.match(r"INSERT\s+OR\s+IGNORE\s+INTO", translated, re.IGNORECASE):
+        translated = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", translated, flags=re.IGNORECASE)
+        translated = f"{translated.rstrip().rstrip(';')} ON CONFLICT DO NOTHING"
+    translated = translated.replace("?", "%s")
+    return re.sub(r":([A-Za-z_][A-Za-z0-9_]*)", r"%(\1)s", translated)
+
+
+def should_return_id(sql: str) -> bool:
+    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users)\b", sql, re.IGNORECASE))
+
+
+def postgres_schema(script: str) -> str:
+    return (
+        script
+        .replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        .replace("REAL NOT NULL", "DOUBLE PRECISION NOT NULL")
+        .replace("REAL ", "DOUBLE PRECISION ")
+    )
+
+
+def connect():
+    if DATABASE_KIND == "postgres":
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError("使用 PostgreSQL 需要安装 psycopg，请运行 pip install -r requirements.txt") from exc
+        url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        return PostgresConnection(psycopg.connect(url, row_factory=dict_row))
+
     connection = sqlite3.connect(DATABASE)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
@@ -143,7 +252,19 @@ def user_to_dict(row: sqlite3.Row) -> dict:
 
 
 def ensure_user_schema(db: sqlite3.Connection) -> None:
-    columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
+    if DATABASE_KIND == "postgres":
+        columns = {
+            row["name"]
+            for row in db.execute(
+                """
+                SELECT column_name AS name
+                FROM information_schema.columns
+                WHERE table_name = 'users'
+                """
+            ).fetchall()
+        }
+    else:
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
     if "phone" not in columns:
         db.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
     for username, phone, _password, _name, _role in SEED_USERS:
@@ -176,8 +297,7 @@ def validate_user(payload: dict, existing: sqlite3.Row | None = None) -> dict:
 def initialize_database() -> None:
     DATABASE.parent.mkdir(parents=True, exist_ok=True)
     with connect() as db:
-        db.executescript(
-            """
+        schema_sql = """
             CREATE TABLE IF NOT EXISTS students (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -276,7 +396,7 @@ def initialize_database() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
             """
-        )
+        db.executescript(postgres_schema(schema_sql) if DATABASE_KIND == "postgres" else schema_sql)
         ensure_user_schema(db)
         now = datetime.now().isoformat(timespec="seconds")
         count = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
@@ -657,7 +777,7 @@ class AppHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            self.send_json({"status": "ok", "database": DATABASE.name})
+            self.send_json({"status": "ok", "database": DATABASE_KIND})
             return
         if parsed.path == "/api/session":
             self.get_session()
@@ -1416,7 +1536,7 @@ def run() -> None:
     initialize_database()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     print(f"声动教培系统已启动：http://{HOST}:{PORT}")
-    print(f"数据库：{DATABASE}")
+    print(f"数据库：{'PostgreSQL' if DATABASE_KIND == 'postgres' else DATABASE}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

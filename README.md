@@ -90,6 +90,35 @@ Render 可以直接读取本项目的 `render.yaml`：
 
 当前 Render 免费部署适合演示和试用，SQLite 数据会保存在 Render 的临时文件系统中，服务重启或重新部署后可能丢失。正式运营建议改用 Render Disk 或 PostgreSQL。
 
+## 接入 PostgreSQL
+
+系统现在支持双数据库模式：
+
+- 未配置 `DATABASE_URL`：默认使用本地 SQLite，适合开发和本机试用
+- 已配置 `DATABASE_URL`：自动使用 PostgreSQL，适合 Render 正式部署
+
+在 Render 中接入 PostgreSQL：
+
+1. 在 Render Dashboard 新建 PostgreSQL 数据库。
+2. 复制数据库的 `Internal Database URL` 或 `External Database URL`。
+3. 打开本项目的 Web Service，进入 `Environment`。
+4. 新增环境变量：
+
+```text
+DATABASE_URL=postgresql://...
+```
+
+5. 重新部署 Web Service。
+
+部署启动时，系统会自动创建表结构和默认试用账号。正式使用前，请用校长账号登录后，在系统设置里创建真实员工账号，并停用或修改默认密码。
+
+本地如果也想连接 PostgreSQL，可以临时运行：
+
+```bash
+export DATABASE_URL="postgresql://用户名:密码@localhost:5432/shengdong"
+python3 server.py
+```
+
 ## 当前数据接口
 
 - `GET /api/health`：服务健康检查
