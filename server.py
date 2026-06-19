@@ -43,7 +43,8 @@ ROLE_LABELS = {
 ROLE_PERMISSIONS = {
     "owner": {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
-        "roster:write", "leads:read", "leads:write", "hours:read", "teaching:read", "settings:read",
+        "roster:write", "leads:read", "leads:write", "hours:read", "teaching:read",
+        "settings:read", "settings:write",
     },
     "academic": {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
@@ -55,11 +56,11 @@ ROLE_PERMISSIONS = {
 }
 
 SEED_USERS = [
-    ("admin", "admin123", "林知夏", "owner"),
-    ("jiaowu", "jiaowu123", "教务前台", "academic"),
-    ("teacher", "teacher123", "陈老师", "teacher"),
-    ("sales", "sales123", "招生顾问", "sales"),
-    ("finance", "finance123", "财务老师", "finance"),
+    ("admin", "13800000001", "admin123", "林知夏", "owner"),
+    ("jiaowu", "13800000002", "jiaowu123", "教务前台", "academic"),
+    ("teacher", "13800000003", "teacher123", "陈老师", "teacher"),
+    ("sales", "13800000004", "sales123", "招生顾问", "sales"),
+    ("finance", "13800000005", "finance123", "财务老师", "finance"),
 ]
 
 SEED_STUDENTS = [
@@ -133,11 +134,43 @@ def user_to_dict(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "username": row["username"],
+        "phone": row["phone"],
         "name": row["name"],
         "role": row["role"],
         "roleLabel": ROLE_LABELS.get(row["role"], row["role"]),
         "permissions": permissions,
     }
+
+
+def ensure_user_schema(db: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
+    if "phone" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+    for username, phone, _password, _name, _role in SEED_USERS:
+        db.execute(
+            "UPDATE users SET phone = ? WHERE username = ? AND phone = ''",
+            (phone, username),
+        )
+    db.execute("UPDATE users SET phone = username WHERE phone = ''")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
+
+
+def validate_user(payload: dict, existing: sqlite3.Row | None = None) -> dict:
+    phone = str(payload.get("phone", "")).strip()
+    name = str(payload.get("name", "")).strip()
+    role = str(payload.get("role", "")).strip()
+    password = str(payload.get("password", "")).strip()
+    if not phone or len(phone) < 7:
+        raise ValueError("请填写有效手机号")
+    if not name:
+        raise ValueError("请填写员工姓名")
+    if role not in ROLE_LABELS:
+        raise ValueError("请选择有效角色")
+    if not existing and len(password) < 6:
+        raise ValueError("初始密码至少 6 位")
+    if existing and password and len(password) < 6:
+        raise ValueError("新密码至少 6 位")
+    return {"phone": phone, "name": name, "role": role, "password": password}
 
 
 def initialize_database() -> None:
@@ -225,6 +258,7 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
+                phone TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 name TEXT NOT NULL,
                 role TEXT NOT NULL,
@@ -243,6 +277,7 @@ def initialize_database() -> None:
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
             """
         )
+        ensure_user_schema(db)
         now = datetime.now().isoformat(timespec="seconds")
         count = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
         if count == 0:
@@ -307,12 +342,12 @@ def initialize_database() -> None:
         if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             db.executemany(
                 """
-                INSERT INTO users (username, password_hash, name, role, active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?)
+                INSERT INTO users (username, phone, password_hash, name, role, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 [
-                    (username, hash_password(password), name, role, now, now)
-                    for username, password, name, role in SEED_USERS
+                    (username, phone, hash_password(password), name, role, now, now)
+                    for username, phone, password, name, role in SEED_USERS
                 ],
             )
 
@@ -582,15 +617,15 @@ class AppHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
-        username = str(payload.get("username", "")).strip()
+        phone = str(payload.get("phone", "")).strip()
         password = str(payload.get("password", ""))
         with connect() as db:
             row = db.execute(
-                "SELECT * FROM users WHERE username = ? AND active = 1",
-                (username,),
+                "SELECT * FROM users WHERE phone = ? AND active = 1",
+                (phone,),
             ).fetchone()
             if not row or not verify_password(password, row["password_hash"]):
-                self.send_error_json(HTTPStatus.UNAUTHORIZED, "账号或密码不正确")
+                self.send_error_json(HTTPStatus.UNAUTHORIZED, "手机号或密码不正确")
                 return
             token = secrets.token_urlsafe(32)
             now = datetime.now()
@@ -627,6 +662,11 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/session":
             self.get_session()
             return
+        if parsed.path == "/api/users":
+            if not self.require_permission("settings:read"):
+                return
+            self.get_users()
+            return
         if parsed.path == "/api/students":
             if not self.require_permission("students:read"):
                 return
@@ -662,6 +702,11 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/logout":
             self.logout()
+            return
+        if path == "/api/users":
+            if not self.require_permission("settings:write"):
+                return
+            self.create_user()
             return
         if path == "/api/students":
             if not self.require_permission("students:write"):
@@ -754,6 +799,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.update_room(item_id)
             return
+        if resource == "users":
+            if not self.require_permission("settings:write"):
+                return
+            self.update_user(item_id)
+            return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
 
     def update_student(self, student_id: int) -> None:
@@ -817,7 +867,109 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.delete_room(item_id)
             return
+        if parts[1] == "users":
+            if not self.require_permission("settings:write"):
+                return
+            self.delete_user(item_id)
+            return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
+
+    def get_users(self) -> None:
+        with connect() as db:
+            rows = db.execute(
+                "SELECT * FROM users WHERE active = 1 ORDER BY id"
+            ).fetchall()
+        self.send_json([user_to_dict(row) for row in rows])
+
+    def create_user(self) -> None:
+        try:
+            data = validate_user(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                cursor = db.execute(
+                    """
+                    INSERT INTO users (username, phone, password_hash, name, role, active, created_at, updated_at)
+                    VALUES (:username, :phone, :password_hash, :name, :role, 1, :created_at, :updated_at)
+                    """,
+                    {
+                        "username": data["phone"],
+                        "phone": data["phone"],
+                        "password_hash": hash_password(data["password"]),
+                        "name": data["name"],
+                        "role": data["role"],
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                row = db.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "该手机号已存在账号")
+            return
+        self.send_json(user_to_dict(row), HTTPStatus.CREATED)
+
+    def update_user(self, user_id: int) -> None:
+        try:
+            payload = self.read_json()
+            with connect() as db:
+                existing = db.execute("SELECT * FROM users WHERE id = ? AND active = 1", (user_id,)).fetchone()
+                if not existing:
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "员工账号不存在")
+                    return
+                data = validate_user(payload, existing)
+                params = {
+                    "id": user_id,
+                    "username": data["phone"],
+                    "phone": data["phone"],
+                    "name": data["name"],
+                    "role": data["role"],
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                }
+                if data["password"]:
+                    params["password_hash"] = hash_password(data["password"])
+                    db.execute(
+                        """
+                        UPDATE users SET username=:username, phone=:phone, name=:name, role=:role,
+                            password_hash=:password_hash, updated_at=:updated_at
+                        WHERE id=:id
+                        """,
+                        params,
+                    )
+                else:
+                    db.execute(
+                        """
+                        UPDATE users SET username=:username, phone=:phone, name=:name, role=:role,
+                            updated_at=:updated_at
+                        WHERE id=:id
+                        """,
+                        params,
+                    )
+                row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "该手机号已存在账号")
+            return
+        self.send_json(user_to_dict(row))
+
+    def delete_user(self, user_id: int) -> None:
+        current = self.current_user()
+        if current and current["id"] == user_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "不能停用当前登录账号")
+            return
+        with connect() as db:
+            cursor = db.execute(
+                "UPDATE users SET active = 0, updated_at = ? WHERE id = ? AND active = 1",
+                (datetime.now().isoformat(timespec="seconds"), user_id),
+            )
+            db.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+        if cursor.rowcount == 0:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "员工账号不存在")
+            return
+        self.send_json({"deleted": True, "id": user_id})
 
     def delete_student(self, student_id: int) -> None:
         with connect() as db:

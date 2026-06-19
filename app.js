@@ -2,6 +2,7 @@ const API_BASE = window.location.protocol === "file:" ? "http://127.0.0.1:4173" 
 let currentUser = null;
 let students = [];
 let catalog = { courses: [], classes: [], teachers: [], rooms: [] };
+let users = [];
 let catalogView = "courses";
 let dashboardStats = {
   totalStudents: 0,
@@ -44,6 +45,14 @@ const rolePages = {
   sales: ["dashboard", "leads", "students"],
   finance: ["dashboard", "hours", "students"],
 };
+
+const roleOptions = [
+  ["owner", "校长 / 管理员"],
+  ["academic", "教务前台"],
+  ["teacher", "授课教师"],
+  ["sales", "招生顾问"],
+  ["finance", "财务"],
+];
 
 const pageContent = document.querySelector("#pageContent");
 let activePage = "dashboard";
@@ -100,11 +109,15 @@ async function loadCatalog() {
   syncStudentCourseOptions();
 }
 
+async function loadUsers() {
+  users = await api("/api/users");
+}
+
 function showLogin(message = "") {
   document.querySelector("#appShell").hidden = true;
   document.querySelector("#loginScreen").hidden = false;
   if (message) showToast(message);
-  setTimeout(() => document.querySelector('#loginForm input[name="username"]')?.focus(), 30);
+  setTimeout(() => document.querySelector('#loginForm input[name="phone"]')?.focus(), 30);
 }
 
 function showApp() {
@@ -483,19 +496,58 @@ function renderHours() {
 
 function renderPlaceholder(type) {
   const isTeaching = type === "teaching";
-  if (!isTeaching) {
-    pageContent.innerHTML = `<div class="settings-grid">
-      ${[
-        ["校长 / 管理员", "admin", "全功能管理，含系统设置"],
-        ["教务前台", "jiaowu", "学员、课程、班级、教师、教室管理"],
-        ["授课教师", "teacher", "查看课表、学员、课程与教学中心"],
-        ["招生顾问", "sales", "招生跟进与学员录入"],
-        ["财务", "finance", "课时和学员信息查看"],
-      ].map(([role, account, desc]) => `<article class="settings-card"><strong>${role}</strong><span>账号：${account}</span><p>${desc}</p></article>`).join("")}
-    </div>`;
-    return;
-  }
   pageContent.innerHTML = `<div class="placeholder-page"><div>${icon("book")}<h2>教学中心</h2><p>教案、作业、作品集与成长评价将在第二阶段开放</p></div></div>`;
+}
+
+function renderSettings() {
+  pageContent.innerHTML = `
+    <div class="section-toolbar">
+      <div><h2>员工账号与角色</h2><p>员工统一使用手机号登录；只有校长可以添加账号和分配角色</p></div>
+      <span class="readonly-badge">校长专属</span>
+    </div>
+    <div class="settings-layout">
+      <section class="panel account-form-panel">
+        <div class="panel-header">
+          <div class="panel-title"><h2 id="userFormTitle">新增员工账号</h2><p>设置手机号、姓名、角色和初始密码</p></div>
+        </div>
+        <form id="userForm" class="account-form">
+          <input type="hidden" name="id" />
+          <label><span>登录手机号</span><input name="phone" required placeholder="例如：13800000006" /></label>
+          <label><span>员工姓名</span><input name="name" required placeholder="例如：王老师" /></label>
+          <label><span>角色</span><select name="role">${roleOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
+          <label><span>密码</span><input name="password" type="password" placeholder="新增时至少 6 位；编辑时留空表示不修改" /></label>
+          <div class="account-form-actions">
+            <button type="button" class="secondary-button cancel-user-edit" hidden>取消编辑</button>
+            <button type="submit" class="primary-button" id="saveUser">保存账号</button>
+          </div>
+        </form>
+      </section>
+      <section class="table-card account-table-card">
+        <table class="data-table">
+          <thead><tr><th>员工</th><th>手机号</th><th>角色</th><th>权限摘要</th><th></th></tr></thead>
+          <tbody>${users.map(user => `<tr>
+            <td><div class="student-cell" style="--student-color:#e8664a"><span class="avatar">${escapeHtml(user.name[0] || "员")}</span><div><strong>${escapeHtml(user.name)}</strong><small>ID ${user.id}</small></div></div></td>
+            <td>${escapeHtml(user.phone)}</td>
+            <td><span class="tag" style="--tag-color:#715b87">${escapeHtml(user.roleLabel)}</span></td>
+            <td><small style="color:var(--muted)">${permissionSummary(user.role)}</small></td>
+            <td><div class="table-actions">
+              <button class="table-action edit-user" data-id="${user.id}" aria-label="编辑 ${escapeHtml(user.name)}">${icon("edit")}</button>
+              <button class="table-action danger delete-user" data-id="${user.id}" aria-label="停用 ${escapeHtml(user.name)}" ${currentUser?.id === user.id ? "disabled" : ""}>${icon("trash")}</button>
+            </div></td>
+          </tr>`).join("")}</tbody>
+        </table>
+      </section>
+    </div>`;
+}
+
+function permissionSummary(role) {
+  return {
+    owner: "全功能，含员工账号管理",
+    academic: "学员、课程、班级、教师、教室",
+    teacher: "课表、学员与教学中心查看",
+    sales: "招生跟进与学员录入",
+    finance: "课时与学员信息查看",
+  }[role] || "基础权限";
 }
 
 async function renderPage(page, query = "") {
@@ -525,13 +577,17 @@ async function renderPage(page, query = "") {
       await Promise.all([loadCatalog(), loadStudents()]);
       renderCatalog();
     }
+    if (page === "settings") {
+      await loadUsers();
+      renderSettings();
+    }
   } catch (error) {
     renderConnectionError(error.message);
   }
   if (page === "schedule") renderSchedule();
   if (page === "leads") renderLeads();
   if (page === "hours") renderHours();
-  if (["teaching", "settings"].includes(page)) renderPlaceholder(page);
+  if (page === "teaching") renderPlaceholder(page);
   document.querySelector(".sidebar").classList.remove("open");
 }
 
@@ -787,6 +843,14 @@ document.addEventListener("click", event => {
 
   const unenroll = event.target.closest(".unenroll-student");
   if (unenroll) unenrollStudent(Number(unenroll.dataset.classId), Number(unenroll.dataset.studentId));
+
+  const editUser = event.target.closest(".edit-user");
+  if (editUser) fillUserForm(Number(editUser.dataset.id));
+
+  const deleteUserButton = event.target.closest(".delete-user");
+  if (deleteUserButton) deleteUser(Number(deleteUserButton.dataset.id));
+
+  if (event.target.closest(".cancel-user-edit")) resetUserForm();
 });
 
 document.querySelector("#quickAdd").addEventListener("click", async () => {
@@ -889,6 +953,36 @@ document.querySelector("#managementForm").addEventListener("submit", async event
   }
 });
 
+document.addEventListener("submit", async event => {
+  if (event.target.id !== "userForm") return;
+  event.preventDefault();
+  if (!can("settings:write")) {
+    showToast("只有校长可以管理员工账号");
+    return;
+  }
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const userId = data.id;
+  delete data.id;
+  const button = document.querySelector("#saveUser");
+  button.classList.add("button-loading");
+  button.textContent = "保存中...";
+  try {
+    await api(userId ? `/api/users/${userId}` : "/api/users", {
+      method: userId ? "PUT" : "POST",
+      body: JSON.stringify(data),
+    });
+    showToast(userId ? "员工账号已更新" : "员工账号已创建");
+    await loadUsers();
+    renderSettings();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.classList.remove("button-loading");
+    button.textContent = "保存账号";
+  }
+});
+
 document.querySelector("#globalSearch").addEventListener("input", event => {
   if (event.target.value.trim()) renderPage("students", event.target.value);
 });
@@ -964,6 +1058,44 @@ async function deleteClass(classId) {
     await api(`/api/classes/${classId}`, { method: "DELETE" });
     showToast(`班级 ${item.name} 已删除`);
     await renderPage("catalog");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function fillUserForm(userId) {
+  const user = users.find(item => item.id === userId);
+  const form = document.querySelector("#userForm");
+  if (!user || !form) return;
+  form.elements.id.value = user.id;
+  form.elements.phone.value = user.phone;
+  form.elements.name.value = user.name;
+  form.elements.role.value = user.role;
+  form.elements.password.value = "";
+  document.querySelector("#userFormTitle").textContent = "编辑员工账号";
+  document.querySelector(".cancel-user-edit").hidden = false;
+  document.querySelector("#saveUser").textContent = "保存修改";
+}
+
+function resetUserForm() {
+  const form = document.querySelector("#userForm");
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = "";
+  document.querySelector("#userFormTitle").textContent = "新增员工账号";
+  document.querySelector(".cancel-user-edit").hidden = true;
+  document.querySelector("#saveUser").textContent = "保存账号";
+}
+
+async function deleteUser(userId) {
+  const user = users.find(item => item.id === userId);
+  if (!user || user.id === currentUser?.id) return;
+  if (!window.confirm(`确定停用员工账号「${user.name}」吗？该手机号将不能再登录。`)) return;
+  try {
+    await api(`/api/users/${userId}`, { method: "DELETE" });
+    showToast(`员工 ${user.name} 已停用`);
+    await loadUsers();
+    renderSettings();
   } catch (error) {
     showToast(error.message);
   }
