@@ -1,5 +1,7 @@
 # 声动教培系统 MVP
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/changyitian000421-ship-it/babaya)
+
 语言艺术培训机构管理端第一版，覆盖：
 
 - 经营工作台
