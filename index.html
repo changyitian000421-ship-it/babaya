@@ -14,7 +14,36 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <section class="login-screen" id="loginScreen" hidden>
+      <div class="login-card">
+        <div class="brand login-brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div>
+            <strong>声动</strong>
+            <small>角色登录</small>
+          </div>
+        </div>
+        <h1>进入教培管理系统</h1>
+        <p>不同角色登录后，只显示自己需要处理的功能。</p>
+        <form id="loginForm" class="login-form">
+          <label><span>账号</span><input name="username" autocomplete="username" required placeholder="例如：admin" /></label>
+          <label><span>密码</span><input name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" /></label>
+          <button class="primary-button" id="loginButton" type="submit">登录系统</button>
+        </form>
+        <div class="demo-accounts">
+          <strong>试用账号</strong>
+          <span>校长：admin / admin123</span>
+          <span>教务：jiaowu / jiaowu123</span>
+          <span>教师：teacher / teacher123</span>
+          <span>招生：sales / sales123</span>
+          <span>财务：finance / finance123</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="app-shell" id="appShell" hidden>
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true">
@@ -63,9 +92,9 @@
         </div>
 
         <div class="profile">
-          <div class="avatar avatar-manager">林</div>
-          <div><strong>林知夏</strong><small>校区管理员</small></div>
-          <button aria-label="更多"><svg><use href="#icon-more"></use></svg></button>
+          <div class="avatar avatar-manager" id="profileAvatar">林</div>
+          <div><strong id="profileName">林知夏</strong><small id="profileRole">校区管理员</small></div>
+          <button id="logoutButton" aria-label="退出登录" title="退出登录"><svg><use href="#icon-more"></use></svg></button>
         </div>
       </aside>
 

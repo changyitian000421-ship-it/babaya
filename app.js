@@ -1,4 +1,5 @@
 const API_BASE = window.location.protocol === "file:" ? "http://127.0.0.1:4173" : "";
+let currentUser = null;
 let students = [];
 let catalog = { courses: [], classes: [], teachers: [], rooms: [] };
 let catalogView = "courses";
@@ -36,8 +37,32 @@ const pageMeta = {
   settings: ["系统配置", "系统设置"],
 };
 
+const rolePages = {
+  owner: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching", "settings"],
+  academic: ["dashboard", "students", "catalog", "schedule", "teaching"],
+  teacher: ["dashboard", "schedule", "teaching", "students", "catalog"],
+  sales: ["dashboard", "leads", "students"],
+  finance: ["dashboard", "hours", "students"],
+};
+
 const pageContent = document.querySelector("#pageContent");
 let activePage = "dashboard";
+
+function permissions() {
+  return new Set(currentUser?.permissions || []);
+}
+
+function can(permission) {
+  return permissions().has(permission);
+}
+
+function allowedPages() {
+  return rolePages[currentUser?.role] || ["dashboard"];
+}
+
+function canOpenPage(page) {
+  return allowedPages().includes(page);
+}
 
 function icon(id) {
   return `<svg><use href="#icon-${id}"></use></svg>`;
@@ -46,6 +71,7 @@ function icon(id) {
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
@@ -53,6 +79,9 @@ async function api(path, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401 && path !== "/api/session" && path !== "/api/login") {
+      showLogin();
+    }
     throw new Error(data.error || `请求失败 (${response.status})`);
   }
   return data;
@@ -69,6 +98,72 @@ async function loadDashboardStats() {
 async function loadCatalog() {
   catalog = await api("/api/catalog");
   syncStudentCourseOptions();
+}
+
+function showLogin(message = "") {
+  document.querySelector("#appShell").hidden = true;
+  document.querySelector("#loginScreen").hidden = false;
+  if (message) showToast(message);
+  setTimeout(() => document.querySelector('#loginForm input[name="username"]')?.focus(), 30);
+}
+
+function showApp() {
+  document.querySelector("#loginScreen").hidden = true;
+  document.querySelector("#appShell").hidden = false;
+}
+
+function applyRoleUi() {
+  document.querySelectorAll(".nav-item").forEach(item => {
+    item.hidden = !canOpenPage(item.dataset.page);
+  });
+  document.querySelector("#quickAdd").hidden = !can("students:write");
+  document.querySelector(".global-search").hidden = !can("students:read");
+  document.querySelector("#profileName").textContent = currentUser?.name || "未登录";
+  document.querySelector("#profileRole").textContent = currentUser?.roleLabel || "";
+  document.querySelector("#profileAvatar").textContent = (currentUser?.name || "声")[0];
+}
+
+async function loadSession() {
+  const data = await api("/api/session");
+  currentUser = data.user;
+  applyRoleUi();
+  showApp();
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const button = document.querySelector("#loginButton");
+  button.classList.add("button-loading");
+  button.textContent = "登录中...";
+  try {
+    const result = await api("/api/login", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    currentUser = result.user;
+    form.reset();
+    applyRoleUi();
+    showApp();
+    showToast(`欢迎回来，${currentUser.name}`);
+    await renderPage(allowedPages()[0] || "dashboard");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.classList.remove("button-loading");
+    button.textContent = "登录系统";
+  }
+}
+
+async function logout() {
+  try {
+    await api("/api/logout", { method: "POST", body: JSON.stringify({}) });
+  } catch (error) {
+    showToast(error.message);
+  }
+  currentUser = null;
+  showLogin("已退出登录");
 }
 
 function renderDashboard() {
@@ -155,6 +250,7 @@ function funnelRow(label, count, percent, color) {
 function renderStudents(query = "") {
   const normalized = query.trim().toLowerCase();
   const result = students.filter(s => [s.name, s.parent, s.phone, s.course].some(v => String(v).toLowerCase().includes(normalized)));
+  const canEditStudents = can("students:write");
   pageContent.innerHTML = `
     <div class="section-toolbar">
       <div><h2>全部学员 <span style="color:var(--muted);font-weight:400">${students.length}</span></h2><p>维护学员档案、课程与剩余课时</p></div>
@@ -172,10 +268,10 @@ function renderStudents(query = "") {
           <td><span class="tag" style="--tag-color:${escapeHtml(s.color)}">${escapeHtml(s.course)}</span></td>
           <td><strong>${formatHours(s.hours)}</strong> 课时</td>
           <td><span class="status-dot" style="--status-color:${statusColor(s.status)}">${escapeHtml(s.status)}</span></td>
-          <td><div class="table-actions">
+          <td>${canEditStudents ? `<div class="table-actions">
             <button class="table-action edit-student" data-id="${s.id}" title="编辑学员" aria-label="编辑 ${escapeHtml(s.name)}">${icon("edit")}</button>
             <button class="table-action danger delete-student" data-id="${s.id}" title="删除学员" aria-label="删除 ${escapeHtml(s.name)}">${icon("trash")}</button>
-          </div></td>
+          </div>` : `<span class="readonly-note">只读</span>`}</td>
         </tr>`).join("")}</tbody>
       </table>` : `<div class="empty-state">没有找到匹配的学员</div>`}
     </div>`;
@@ -185,15 +281,16 @@ function renderStudents(query = "") {
 function renderCatalog() {
   const activeClasses = catalog.classes.filter(item => ["招生中", "进行中"].includes(item.status));
   const enrolled = new Set(catalog.classes.flatMap(item => item.students.map(student => student.id))).size;
+  const canManageCatalog = can("catalog:write");
   pageContent.innerHTML = `
     <div class="section-toolbar">
       <div><h2>课程与班级管理</h2><p>维护课程产品、开班信息和学员分班</p></div>
-      <div class="toolbar-actions">
+      ${canManageCatalog ? `<div class="toolbar-actions">
         <button class="secondary-button add-course">${icon("plus")} 新增课程</button>
         <button class="secondary-button add-teacher">${icon("plus")} 新增教师</button>
         <button class="secondary-button add-room">${icon("plus")} 新增教室</button>
         <button class="primary-button add-class">${icon("plus")} 新建班级</button>
-      </div>
+      </div>` : `<span class="readonly-badge">当前角色仅可查看</span>`}
     </div>
     <div class="catalog-summary">
       ${catalogStat("课程产品", catalog.courses.length)}
@@ -223,6 +320,7 @@ function renderCatalogView() {
 
 function renderCourseGrid() {
   if (!catalog.courses.length) return `<div class="empty-state">还没有课程产品</div>`;
+  const canManageCatalog = can("catalog:write");
   return `<div class="course-grid">${catalog.courses.map(course => `
     <article class="course-card" style="--course-color:${escapeHtml(course.color)}">
       <div class="course-card-head">
@@ -238,16 +336,18 @@ function renderCourseGrid() {
       </div>
       <div class="course-card-footer">
         <span>课程编号 C${String(course.id).padStart(3, "0")}</span>
-        <div class="card-actions">
+        ${canManageCatalog ? `<div class="card-actions">
           <button class="table-action edit-course" data-id="${course.id}" aria-label="编辑 ${escapeHtml(course.name)}">${icon("edit")}</button>
           <button class="table-action danger delete-course" data-id="${course.id}" aria-label="删除 ${escapeHtml(course.name)}">${icon("trash")}</button>
-        </div>
+        </div>` : `<span class="readonly-note">只读</span>`}
       </div>
     </article>`).join("")}</div>`;
 }
 
 function renderClassGrid() {
   if (!catalog.classes.length) return `<div class="empty-state">还没有班级</div>`;
+  const canManageCatalog = can("catalog:write");
+  const canManageRoster = can("roster:write");
   return `<div class="class-grid">${catalog.classes.map(item => {
     const percent = Math.min(100, item.current / item.capacity * 100);
     return `<article class="class-card" style="--class-color:${escapeHtml(item.course_color)}">
@@ -266,11 +366,11 @@ function renderClassGrid() {
           <div><span>班级人数</span><strong class="${item.current >= item.capacity ? "capacity-warning" : ""}">${item.current} / ${item.capacity} 人</strong></div>
           <div class="capacity-bar"><span style="width:${percent}%;background:${escapeHtml(item.course_color)}"></span></div>
         </div>
-        <button class="secondary-button manage-roster" data-id="${item.id}">花名册</button>
-        <div class="card-actions">
+        <button class="secondary-button manage-roster" data-id="${item.id}">${canManageRoster ? "花名册" : "查看名单"}</button>
+        ${canManageCatalog ? `<div class="card-actions">
           <button class="table-action edit-class" data-id="${item.id}" aria-label="编辑 ${escapeHtml(item.name)}">${icon("edit")}</button>
           <button class="table-action danger delete-class" data-id="${item.id}" aria-label="删除 ${escapeHtml(item.name)}">${icon("trash")}</button>
-        </div>
+        </div>` : `<span class="readonly-note">只读</span>`}
       </div>
     </article>`;
   }).join("")}</div>`;
@@ -278,15 +378,16 @@ function renderClassGrid() {
 
 function renderTeacherGrid() {
   if (!catalog.teachers.length) return `<div class="empty-state">还没有教师</div>`;
+  const canManageCatalog = can("catalog:write");
   return `<div class="resource-grid">${catalog.teachers.map(teacher => `
     <article class="resource-card" style="--resource-color:${escapeHtml(teacher.color)}">
       <div class="resource-head">
         <span class="avatar" style="color:${escapeHtml(teacher.color)};background:color-mix(in srgb, ${escapeHtml(teacher.color)} 14%, white)">${escapeHtml(teacher.display_name[0] || "师")}</span>
         <div><h3>${escapeHtml(teacher.display_name)}</h3><p>${escapeHtml(teacher.name)}</p></div>
-        <div class="card-actions">
+        ${canManageCatalog ? `<div class="card-actions">
           <button class="table-action edit-teacher" data-id="${teacher.id}" aria-label="编辑 ${escapeHtml(teacher.display_name)}">${icon("edit")}</button>
           <button class="table-action danger delete-teacher" data-id="${teacher.id}" aria-label="删除 ${escapeHtml(teacher.display_name)}">${icon("trash")}</button>
-        </div>
+        </div>` : `<span class="readonly-note">只读</span>`}
       </div>
       <div class="resource-info">
         <span>擅长方向<strong>${escapeHtml(teacher.specialty || "未填写")}</strong></span>
@@ -298,15 +399,16 @@ function renderTeacherGrid() {
 
 function renderRoomGrid() {
   if (!catalog.rooms.length) return `<div class="empty-state">还没有教室</div>`;
+  const canManageCatalog = can("catalog:write");
   return `<div class="resource-grid">${catalog.rooms.map(room => `
     <article class="resource-card" style="--resource-color:#e8664a">
       <div class="resource-head">
         <span class="room-mark">${escapeHtml(room.code)}</span>
         <div><h3>${escapeHtml(room.name)}</h3><p>教室编号 ${escapeHtml(room.code)}</p></div>
-        <div class="card-actions">
+        ${canManageCatalog ? `<div class="card-actions">
           <button class="table-action edit-room" data-id="${room.id}" aria-label="编辑 ${escapeHtml(room.name)}">${icon("edit")}</button>
           <button class="table-action danger delete-room" data-id="${room.id}" aria-label="删除 ${escapeHtml(room.name)}">${icon("trash")}</button>
-        </div>
+        </div>` : `<span class="readonly-note">只读</span>`}
       </div>
       <div class="resource-info">
         <span>教室容量<strong>${room.capacity} 人</strong></span>
@@ -332,7 +434,7 @@ function renderSchedule() {
   pageContent.innerHTML = `
     <div class="section-toolbar">
       <div><h2>6 月 8 日 - 6 月 14 日</h2><p>本周共 21 节课，预计到课 146 人次</p></div>
-      <div class="toolbar-actions"><button class="secondary-button">今天</button><button class="primary-button">${icon("plus")} 新建课程</button></div>
+      <div class="toolbar-actions"><button class="secondary-button">今天</button>${can("catalog:write") ? `<button class="primary-button">${icon("plus")} 新建课程</button>` : ""}</div>
     </div>
     <div class="week-strip">${days.map((d, i) => `<button class="day-button ${i === 5 ? "active" : ""}"><span>${d}</span><strong>${8 + i}</strong></button>`).join("")}</div>
     <div class="schedule-board">
@@ -349,7 +451,7 @@ function renderLeads() {
   pageContent.innerHTML = `
     <div class="section-toolbar">
       <div><h2>招生跟进看板</h2><p>拖动式流程将在正式版接入，当前可查看完整跟进状态</p></div>
-      <div class="toolbar-actions"><button class="secondary-button">${icon("filter")} 筛选</button><button class="primary-button">${icon("plus")} 新增线索</button></div>
+      <div class="toolbar-actions"><button class="secondary-button">${icon("filter")} 筛选</button>${can("leads:write") ? `<button class="primary-button">${icon("plus")} 新增线索</button>` : ""}</div>
     </div>
     <div class="lead-board">${stages.map(stage => {
       const items = leads.filter(l => l.stage === stage);
@@ -381,14 +483,33 @@ function renderHours() {
 
 function renderPlaceholder(type) {
   const isTeaching = type === "teaching";
-  pageContent.innerHTML = `<div class="placeholder-page"><div>${icon(isTeaching ? "book" : "settings")}<h2>${isTeaching ? "教学中心" : "系统设置"}</h2><p>${isTeaching ? "教案、作业、作品集与成长评价将在第二阶段开放" : "校区、账号、角色权限与通知规则将在第二阶段开放"}</p></div></div>`;
+  if (!isTeaching) {
+    pageContent.innerHTML = `<div class="settings-grid">
+      ${[
+        ["校长 / 管理员", "admin", "全功能管理，含系统设置"],
+        ["教务前台", "jiaowu", "学员、课程、班级、教师、教室管理"],
+        ["授课教师", "teacher", "查看课表、学员、课程与教学中心"],
+        ["招生顾问", "sales", "招生跟进与学员录入"],
+        ["财务", "finance", "课时和学员信息查看"],
+      ].map(([role, account, desc]) => `<article class="settings-card"><strong>${role}</strong><span>账号：${account}</span><p>${desc}</p></article>`).join("")}
+    </div>`;
+    return;
+  }
+  pageContent.innerHTML = `<div class="placeholder-page"><div>${icon("book")}<h2>教学中心</h2><p>教案、作业、作品集与成长评价将在第二阶段开放</p></div></div>`;
 }
 
 async function renderPage(page, query = "") {
+  if (!currentUser) {
+    showLogin();
+    return;
+  }
+  if (!canOpenPage(page)) {
+    page = allowedPages()[0] || "dashboard";
+  }
   activePage = page;
   const [eyebrow, title] = pageMeta[page];
   document.querySelector("#pageEyebrow").textContent = eyebrow;
-  document.querySelector("#pageTitle").textContent = title;
+  document.querySelector("#pageTitle").textContent = page === "dashboard" ? `下午好，${currentUser.name}` : title;
   document.querySelectorAll(".nav-item").forEach(item => item.classList.toggle("active", item.dataset.page === page));
   try {
     if (page === "dashboard") {
@@ -576,21 +697,22 @@ function closeManagement() {
 function openRoster(classId) {
   const item = catalog.classes.find(entry => entry.id === classId);
   if (!item) return;
+  const canManageRoster = can("roster:write");
   const assignedIds = new Set(item.students.map(student => student.id));
   const available = students.filter(student => !assignedIds.has(student.id));
   document.querySelector("#rosterTitle").textContent = `${item.name} · ${item.current}/${item.capacity} 人`;
   document.querySelector("#rosterContent").innerHTML = `
-    <div class="roster-add">
+    ${canManageRoster ? `<div class="roster-add">
       <select id="rosterStudentSelect" ${item.current >= item.capacity || !available.length ? "disabled" : ""}>
         ${available.length ? available.map(student => `<option value="${student.id}">${escapeHtml(student.name)} · ${student.age}岁 · ${escapeHtml(student.course)}</option>`).join("") : `<option>暂无可添加学员</option>`}
       </select>
       <button class="primary-button enroll-student" data-id="${item.id}" ${item.current >= item.capacity || !available.length ? "disabled" : ""}>加入班级</button>
-    </div>
+    </div>` : `<div class="roster-readonly">当前角色只能查看班级花名册，不能调整分班。</div>`}
     <div class="roster-list">
       ${item.students.length ? item.students.map(student => `<div class="roster-person" style="--person-color:${escapeHtml(student.color)}">
         <span class="avatar">${escapeHtml(student.name[0])}</span>
         <div><strong>${escapeHtml(student.name)}</strong><small>${student.age} 岁 · ${escapeHtml(student.parent)} · ${formatHours(student.hours)} 课时</small></div>
-        <button class="table-action danger unenroll-student" data-class-id="${item.id}" data-student-id="${student.id}" aria-label="移出 ${escapeHtml(student.name)}">${icon("close")}</button>
+        ${canManageRoster ? `<button class="table-action danger unenroll-student" data-class-id="${item.id}" data-student-id="${student.id}" aria-label="移出 ${escapeHtml(student.name)}">${icon("close")}</button>` : ""}
       </div>`).join("") : `<div class="roster-empty">班级中还没有学员</div>`}
     </div>`;
   document.querySelector("#rosterBackdrop").hidden = false;
@@ -602,7 +724,7 @@ function closeRoster() {
 
 document.addEventListener("click", event => {
   const nav = event.target.closest(".nav-item");
-  if (nav) renderPage(nav.dataset.page);
+  if (nav && canOpenPage(nav.dataset.page)) renderPage(nav.dataset.page);
 
   const go = event.target.closest("[data-go]");
   if (go) renderPage(go.dataset.go);
@@ -628,10 +750,10 @@ document.addEventListener("click", event => {
     renderCatalog();
   }
 
-  if (event.target.closest(".add-course")) openCourseModal();
-  if (event.target.closest(".add-class")) openClassModal();
-  if (event.target.closest(".add-teacher")) openTeacherModal();
-  if (event.target.closest(".add-room")) openRoomModal();
+  if (event.target.closest(".add-course") && can("catalog:write")) openCourseModal();
+  if (event.target.closest(".add-class") && can("catalog:write")) openClassModal();
+  if (event.target.closest(".add-teacher") && can("catalog:write")) openTeacherModal();
+  if (event.target.closest(".add-room") && can("catalog:write")) openRoomModal();
 
   const editCourse = event.target.closest(".edit-course");
   if (editCourse) openCourseModal(catalog.courses.find(item => item.id === Number(editCourse.dataset.id)));
@@ -668,6 +790,10 @@ document.addEventListener("click", event => {
 });
 
 document.querySelector("#quickAdd").addEventListener("click", async () => {
+  if (!can("students:write")) {
+    showToast("当前角色不能新增学员");
+    return;
+  }
   try {
     if (!catalog.courses.length) await loadCatalog();
   } catch (error) {
@@ -690,9 +816,15 @@ document.querySelector("#closeRoster").addEventListener("click", closeRoster);
 document.querySelector("#rosterBackdrop").addEventListener("click", event => {
   if (event.target.id === "rosterBackdrop") closeRoster();
 });
+document.querySelector("#loginForm").addEventListener("submit", handleLogin);
+document.querySelector("#logoutButton").addEventListener("click", logout);
 
 document.querySelector("#studentForm").addEventListener("submit", async event => {
   event.preventDefault();
+  if (!can("students:write")) {
+    showToast("当前角色不能修改学员");
+    return;
+  }
   const form = event.target;
   const data = Object.fromEntries(new FormData(form));
   const studentId = data.id;
@@ -721,6 +853,10 @@ document.querySelector("#studentForm").addEventListener("submit", async event =>
 
 document.querySelector("#managementForm").addEventListener("submit", async event => {
   event.preventDefault();
+  if (!can("catalog:write")) {
+    showToast("当前角色不能修改课程与班级");
+    return;
+  }
   const form = event.target;
   const data = Object.fromEntries(new FormData(form));
   const type = data.type;
@@ -861,4 +997,14 @@ async function unenrollStudent(classId, studentId) {
   }
 }
 
-renderPage("dashboard");
+async function boot() {
+  try {
+    await loadSession();
+    await renderPage(allowedPages()[0] || "dashboard");
+  } catch (error) {
+    currentUser = null;
+    showLogin();
+  }
+}
+
+boot();

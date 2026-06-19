@@ -7,12 +7,16 @@ Serves the static frontend and a small JSON API backed by SQLite.
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import mimetypes
 import os
+import secrets
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -25,6 +29,38 @@ PORT = int(os.environ.get("PORT", "4173"))
 
 STATUSES = {"在读", "待续费", "请假中", "待分班", "停课"}
 COLORS = ["#e8664a", "#715b87", "#4f896f", "#c89436", "#507b9d"]
+SESSION_COOKIE = "sd_session"
+SESSION_HOURS = 12
+
+ROLE_LABELS = {
+    "owner": "校长 / 管理员",
+    "academic": "教务前台",
+    "teacher": "授课教师",
+    "sales": "招生顾问",
+    "finance": "财务",
+}
+
+ROLE_PERMISSIONS = {
+    "owner": {
+        "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
+        "roster:write", "leads:read", "leads:write", "hours:read", "teaching:read", "settings:read",
+    },
+    "academic": {
+        "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
+        "roster:write", "teaching:read",
+    },
+    "teacher": {"dashboard:read", "students:read", "catalog:read", "teaching:read"},
+    "sales": {"dashboard:read", "students:read", "students:write", "leads:read", "leads:write"},
+    "finance": {"dashboard:read", "students:read", "hours:read"},
+}
+
+SEED_USERS = [
+    ("admin", "admin123", "林知夏", "owner"),
+    ("jiaowu", "jiaowu123", "教务前台", "academic"),
+    ("teacher", "teacher123", "陈老师", "teacher"),
+    ("sales", "sales123", "招生顾问", "sales"),
+    ("finance", "finance123", "财务老师", "finance"),
+]
 
 SEED_STUDENTS = [
     ("顾言溪", 8, "顾女士", "138****2168", "少儿主持基础班", 24, "在读", "#e8664a", ""),
@@ -67,6 +103,41 @@ def connect() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def hash_password(password: str, salt: str | None = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    iterations = 120_000
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations).hex()
+    return f"pbkdf2_sha256${iterations}${salt}${digest}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, iterations, salt, expected = stored_hash.split("$", 3)
+    except ValueError:
+        return False
+    if algorithm != "pbkdf2_sha256":
+        return False
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        int(iterations),
+    ).hex()
+    return hmac.compare_digest(digest, expected)
+
+
+def user_to_dict(row: sqlite3.Row) -> dict:
+    permissions = sorted(ROLE_PERMISSIONS.get(row["role"], set()))
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "name": row["name"],
+        "role": row["role"],
+        "roleLabel": ROLE_LABELS.get(row["role"], row["role"]),
+        "permissions": permissions,
+    }
 
 
 def initialize_database() -> None:
@@ -150,6 +221,26 @@ def initialize_database() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_classes_course ON classes(course_id);
             CREATE INDEX IF NOT EXISTS idx_class_students_student ON class_students(student_id);
+
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
             """
         )
         now = datetime.now().isoformat(timespec="seconds")
@@ -213,6 +304,17 @@ def initialize_database() -> None:
                         "INSERT OR IGNORE INTO class_students (class_id, student_id, joined_at) VALUES (?, ?, ?)",
                         (class_row["id"], student["id"], now),
                     )
+        if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+            db.executemany(
+                """
+                INSERT INTO users (username, password_hash, name, role, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+                """,
+                [
+                    (username, hash_password(password), name, role, now, now)
+                    for username, password, name, role in SEED_USERS
+                ],
+            )
 
 
 def student_to_dict(row: sqlite3.Row) -> dict:
@@ -396,13 +498,21 @@ class AppHandler(BaseHTTPRequestHandler):
     def log_message(self, format_string: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {format_string % args}")
 
-    def send_json(self, data: dict | list, status: HTTPStatus = HTTPStatus.OK) -> None:
+    def send_json(
+        self,
+        data: dict | list,
+        status: HTTPStatus = HTTPStatus.OK,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+        self.send_header("Access-Control-Allow-Credentials", "true")
+        for key, value in (extra_headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -424,18 +534,112 @@ class AppHandler(BaseHTTPRequestHandler):
             raise ValueError("请求内容格式错误")
         return payload
 
+    def session_cookie(self) -> str:
+        cookie = SimpleCookie(self.headers.get("Cookie", ""))
+        morsel = cookie.get(SESSION_COOKIE)
+        return morsel.value if morsel else ""
+
+    def current_user(self) -> dict | None:
+        token = self.session_cookie()
+        if not token:
+            return None
+        now = datetime.now().isoformat(timespec="seconds")
+        with connect() as db:
+            db.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (now,))
+            row = db.execute(
+                """
+                SELECT u.* FROM auth_sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.token = ? AND s.expires_at > ? AND u.active = 1
+                """,
+                (token, now),
+            ).fetchone()
+        return user_to_dict(row) if row else None
+
+    def require_permission(self, permission: str) -> dict | None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return None
+        if permission not in set(user["permissions"]):
+            self.send_error_json(HTTPStatus.FORBIDDEN, "当前角色没有此操作权限")
+            return None
+        return user
+
+    def set_session_cookie(self, token: str, max_age: int) -> str:
+        return f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}"
+
+    def get_session(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        self.send_json({"user": user})
+
+    def login(self) -> None:
+        try:
+            payload = self.read_json()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        username = str(payload.get("username", "")).strip()
+        password = str(payload.get("password", ""))
+        with connect() as db:
+            row = db.execute(
+                "SELECT * FROM users WHERE username = ? AND active = 1",
+                (username,),
+            ).fetchone()
+            if not row or not verify_password(password, row["password_hash"]):
+                self.send_error_json(HTTPStatus.UNAUTHORIZED, "账号或密码不正确")
+                return
+            token = secrets.token_urlsafe(32)
+            now = datetime.now()
+            expires_at = now + timedelta(hours=SESSION_HOURS)
+            db.execute(
+                "INSERT INTO auth_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                (
+                    token,
+                    row["id"],
+                    now.isoformat(timespec="seconds"),
+                    expires_at.isoformat(timespec="seconds"),
+                ),
+            )
+        self.send_json(
+            {"user": user_to_dict(row)},
+            extra_headers={"Set-Cookie": self.set_session_cookie(token, SESSION_HOURS * 60 * 60)},
+        )
+
+    def logout(self) -> None:
+        token = self.session_cookie()
+        if token:
+            with connect() as db:
+                db.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+        self.send_json(
+            {"loggedOut": True},
+            extra_headers={"Set-Cookie": self.set_session_cookie("", 0)},
+        )
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
             self.send_json({"status": "ok", "database": DATABASE.name})
             return
+        if parsed.path == "/api/session":
+            self.get_session()
+            return
         if parsed.path == "/api/students":
+            if not self.require_permission("students:read"):
+                return
             self.get_students(parse_qs(parsed.query))
             return
         if parsed.path == "/api/catalog":
+            if not self.require_permission("catalog:read"):
+                return
             self.get_catalog()
             return
         if parsed.path == "/api/dashboard":
+            if not self.require_permission("dashboard:read"):
+                return
             self.get_dashboard()
             return
         if parsed.path.startswith("/api/"):
@@ -445,30 +649,49 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Credentials", "true")
         self.end_headers()
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/login":
+            self.login()
+            return
+        if path == "/api/logout":
+            self.logout()
+            return
         if path == "/api/students":
+            if not self.require_permission("students:write"):
+                return
             self.create_student()
             return
         if path == "/api/courses":
+            if not self.require_permission("catalog:write"):
+                return
             self.create_course()
             return
         if path == "/api/classes":
+            if not self.require_permission("catalog:write"):
+                return
             self.create_class()
             return
         if path == "/api/teachers":
+            if not self.require_permission("catalog:write"):
+                return
             self.create_teacher()
             return
         if path == "/api/rooms":
+            if not self.require_permission("catalog:write"):
+                return
             self.create_room()
             return
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "students":
+            if not self.require_permission("roster:write"):
+                return
             self.enroll_student(parts[2])
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
@@ -507,18 +730,28 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "编号无效")
             return
         if resource == "students":
+            if not self.require_permission("students:write"):
+                return
             self.update_student(item_id)
             return
         if resource == "courses":
+            if not self.require_permission("catalog:write"):
+                return
             self.update_course(item_id)
             return
         if resource == "classes":
+            if not self.require_permission("catalog:write"):
+                return
             self.update_class(item_id)
             return
         if resource == "teachers":
+            if not self.require_permission("catalog:write"):
+                return
             self.update_teacher(item_id)
             return
         if resource == "rooms":
+            if not self.require_permission("catalog:write"):
+                return
             self.update_room(item_id)
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
@@ -547,6 +780,8 @@ class AppHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         parts = path.strip("/").split("/")
         if len(parts) == 5 and parts[:2] == ["api", "classes"] and parts[3] == "students":
+            if not self.require_permission("roster:write"):
+                return
             self.unenroll_student(parts[2], parts[4])
             return
         if len(parts) != 3 or parts[0] != "api":
@@ -558,18 +793,28 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "编号无效")
             return
         if parts[1] == "students":
+            if not self.require_permission("students:write"):
+                return
             self.delete_student(item_id)
             return
         if parts[1] == "courses":
+            if not self.require_permission("catalog:write"):
+                return
             self.delete_course(item_id)
             return
         if parts[1] == "classes":
+            if not self.require_permission("catalog:write"):
+                return
             self.delete_class(item_id)
             return
         if parts[1] == "teachers":
+            if not self.require_permission("catalog:write"):
+                return
             self.delete_teacher(item_id)
             return
         if parts[1] == "rooms":
+            if not self.require_permission("catalog:write"):
+                return
             self.delete_room(item_id)
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
