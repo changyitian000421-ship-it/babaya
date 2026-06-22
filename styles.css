@@ -151,6 +151,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .profile button { margin-left: auto; padding: 4px; border: 0; color: var(--muted); background: none; cursor: pointer; }
 .avatar { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; font-weight: 700; }
 .avatar-manager { color: #2f2518; background: linear-gradient(145deg, color-mix(in srgb, var(--profile-color, #ff9f1c) 55%, white), var(--profile-color, #ff9f1c)); }
+.avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 
 .main { width: calc(100% - 246px); min-height: 100vh; margin-left: 246px; }
 .topbar {
@@ -400,6 +401,8 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
 .profile-preview { display: flex; align-items: center; gap: 13px; padding: 0 22px 4px; }
 .large-avatar { width: 54px; height: 54px; font-size: 18px; }
 .profile-preview strong { display: block; font-size: 15px; }.profile-preview small { color: var(--muted); font-size: 10px; }
+.avatar-upload-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 4px; }
+.avatar-upload-actions small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .account-tips-card { grid-column: 1 / -1; }
 .account-tips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0 22px 22px; }
 .account-tips div { padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: #fffefa; }

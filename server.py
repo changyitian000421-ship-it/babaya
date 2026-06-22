@@ -367,6 +367,7 @@ def user_to_dict(row: sqlite3.Row) -> dict:
         "name": row["name"],
         "avatarText": row["avatar_text"] if "avatar_text" in row.keys() else (row["name"][:1] or "员"),
         "avatarColor": row["avatar_color"] if "avatar_color" in row.keys() else "#ff9f1c",
+        "avatarImage": row["avatar_image"] if "avatar_image" in row.keys() else "",
         "role": row["role"],
         "roleLabel": ROLE_LABELS.get(row["role"], row["role"]),
         "permissions": permissions,
@@ -381,6 +382,8 @@ def ensure_user_schema(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE users ADD COLUMN avatar_text TEXT NOT NULL DEFAULT ''")
     if "avatar_color" not in columns:
         db.execute("ALTER TABLE users ADD COLUMN avatar_color TEXT NOT NULL DEFAULT '#ff9f1c'")
+    if "avatar_image" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN avatar_image TEXT NOT NULL DEFAULT ''")
     for username, phone, _password, _name, _role in SEED_USERS:
         db.execute(
             "UPDATE users SET phone = ? WHERE username = ? AND phone = ''",
@@ -462,6 +465,7 @@ def validate_profile(payload: dict) -> dict:
     name = str(payload.get("name", "")).strip()
     avatar_text = str(payload.get("avatar_text", "")).strip()[:2]
     avatar_color = str(payload.get("avatar_color", "#ff9f1c")).strip() or "#ff9f1c"
+    avatar_image = str(payload.get("avatar_image", "")).strip()
     if not phone or len(phone) < 7:
         raise ValueError("请填写有效手机号")
     if not name:
@@ -470,7 +474,12 @@ def validate_profile(payload: dict) -> dict:
         avatar_text = name[:1] or "员"
     if not re.match(r"^#[0-9a-fA-F]{6}$", avatar_color):
         raise ValueError("头像颜色格式无效")
-    return {"phone": phone, "name": name, "avatar_text": avatar_text, "avatar_color": avatar_color}
+    if avatar_image:
+        if len(avatar_image) > 450_000:
+            raise ValueError("头像图片太大，请选择较小图片")
+        if not re.match(r"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$", avatar_image):
+            raise ValueError("头像图片格式仅支持 PNG、JPG 或 WebP")
+    return {"phone": phone, "name": name, "avatar_text": avatar_text, "avatar_color": avatar_color, "avatar_image": avatar_image}
 
 
 def validate_password_change(payload: dict) -> dict:
@@ -578,6 +587,7 @@ def initialize_database() -> None:
                 name TEXT NOT NULL,
                 avatar_text TEXT NOT NULL DEFAULT '',
                 avatar_color TEXT NOT NULL DEFAULT '#ff9f1c',
+                avatar_image TEXT NOT NULL DEFAULT '',
                 role TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -702,8 +712,8 @@ def initialize_database() -> None:
         if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             db.executemany(
                 """
-                INSERT INTO users (username, phone, password_hash, name, avatar_text, avatar_color, role, active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                INSERT INTO users (username, phone, password_hash, name, avatar_text, avatar_color, avatar_image, role, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, '', ?, 1, ?, ?)
                 """,
                 [
                     (username, phone, hash_password(password), name, name[:1], COLORS[index % len(COLORS)], role, now, now)
@@ -1165,7 +1175,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 db.execute(
                     """
                     UPDATE users SET username=:username, phone=:phone, name=:name,
-                        avatar_text=:avatar_text, avatar_color=:avatar_color, updated_at=:updated_at
+                        avatar_text=:avatar_text, avatar_color=:avatar_color, avatar_image=:avatar_image, updated_at=:updated_at
                     WHERE id=:id AND active = 1
                     """,
                     data,
@@ -1645,8 +1655,8 @@ class AppHandler(BaseHTTPRequestHandler):
             with connect() as db:
                 cursor = db.execute(
                     """
-                    INSERT INTO users (username, phone, password_hash, name, avatar_text, avatar_color, role, active, created_at, updated_at)
-                    VALUES (:username, :phone, :password_hash, :name, :avatar_text, :avatar_color, :role, 1, :created_at, :updated_at)
+                    INSERT INTO users (username, phone, password_hash, name, avatar_text, avatar_color, avatar_image, role, active, created_at, updated_at)
+                    VALUES (:username, :phone, :password_hash, :name, :avatar_text, :avatar_color, '', :role, 1, :created_at, :updated_at)
                     """,
                     {
                         "username": data["phone"],

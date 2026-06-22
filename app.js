@@ -74,6 +74,13 @@ function icon(id) {
   return `<svg><use href="#icon-${id}"></use></svg>`;
 }
 
+function avatarMarkup(user, className = "") {
+  const image = user?.avatarImage || "";
+  const text = user?.avatarText || (user?.name || "员")[0];
+  const color = user?.avatarColor || "#ff9f1c";
+  return `<span class="avatar avatar-manager ${className}" style="--profile-color:${escapeHtml(color)}">${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(user?.name || "头像")}" />` : escapeHtml(text)}</span>`;
+}
+
 function todayScheduleIndex() {
   const day = new Date().getDay();
   return day === 0 ? 6 : day - 1;
@@ -152,8 +159,10 @@ function applyRoleUi() {
   document.querySelector("#profileName").textContent = currentUser?.name || "未登录";
   document.querySelector("#profileRole").textContent = currentUser?.roleLabel || "";
   const avatar = document.querySelector("#profileAvatar");
-  avatar.textContent = currentUser?.avatarText || (currentUser?.name || "声")[0];
   avatar.style.setProperty("--profile-color", currentUser?.avatarColor || "#ff9f1c");
+  avatar.innerHTML = currentUser?.avatarImage
+    ? `<img src="${escapeHtml(currentUser.avatarImage)}" alt="${escapeHtml(currentUser.name)}" />`
+    : escapeHtml(currentUser?.avatarText || (currentUser?.name || "声")[0]);
 }
 
 async function loadSession() {
@@ -876,7 +885,7 @@ function renderSettings() {
         <table class="data-table">
           <thead><tr><th>员工</th><th>手机号</th><th>角色</th><th>权限摘要</th><th></th></tr></thead>
           <tbody>${users.map(user => `<tr>
-            <td><div class="student-cell" style="--student-color:${escapeHtml(user.avatarColor || "#ff9f1c")}"><span class="avatar">${escapeHtml(user.avatarText || user.name[0] || "员")}</span><div><strong>${escapeHtml(user.name)}</strong><small>ID ${user.id}</small></div></div></td>
+            <td><div class="student-cell" style="--student-color:${escapeHtml(user.avatarColor || "#ff9f1c")}">${avatarMarkup(user)}<div><strong>${escapeHtml(user.name)}</strong><small>ID ${user.id}</small></div></div></td>
             <td>${escapeHtml(user.phone)}</td>
             <td><span class="tag" style="--tag-color:#715b87">${escapeHtml(user.roleLabel)}</span></td>
             <td><small style="color:var(--muted)">${permissionSummary(user.role)}</small></td>
@@ -899,12 +908,18 @@ function renderAccount() {
         </div>
         <form id="profileForm" class="account-form">
           <div class="profile-preview">
-            <span class="avatar avatar-manager large-avatar" style="--profile-color:${escapeHtml(currentUser.avatarColor || "#ff9f1c")}">${escapeHtml(currentUser.avatarText || currentUser.name[0] || "员")}</span>
+            ${avatarMarkup(currentUser, "large-avatar")}
             <div><strong>${escapeHtml(currentUser.name)}</strong><small>${escapeHtml(currentUser.roleLabel)} · ${escapeHtml(currentUser.phone)}</small></div>
+          </div>
+          <input type="hidden" name="avatar_image" value="${escapeHtml(currentUser.avatarImage || "")}" />
+          <label class="full"><span>上传头像图片</span><input name="avatar_file" type="file" accept="image/png,image/jpeg,image/webp" /></label>
+          <div class="avatar-upload-actions">
+            <button type="button" class="secondary-button remove-avatar-image" ${currentUser.avatarImage ? "" : "disabled"}>移除图片头像</button>
+            <small>支持 JPG、PNG、WebP；会自动压缩后保存。</small>
           </div>
           <label><span>显示姓名</span><input name="name" required value="${escapeHtml(currentUser.name)}" /></label>
           <label><span>登录手机号</span><input name="phone" required value="${escapeHtml(currentUser.phone)}" /></label>
-          <label><span>头像文字</span><input name="avatar_text" maxlength="2" value="${escapeHtml(currentUser.avatarText || currentUser.name[0] || "员")}" placeholder="1-2 个字" /></label>
+          <label><span>文字头像兜底</span><input name="avatar_text" maxlength="2" value="${escapeHtml(currentUser.avatarText || currentUser.name[0] || "员")}" placeholder="1-2 个字" /></label>
           <label class="color-field"><span>头像颜色</span><input name="avatar_color" type="color" value="${escapeHtml(currentUser.avatarColor || "#ff9f1c")}" /></label>
           <div class="account-form-actions"><button type="submit" class="primary-button" id="saveProfile">保存个人资料</button></div>
         </form>
@@ -1194,6 +1209,19 @@ document.addEventListener("click", async event => {
 
   const profile = event.target.closest(".profile");
   if (profile && !event.target.closest("#logoutButton") && canOpenPage("account")) renderPage("account");
+
+  const removeAvatar = event.target.closest(".remove-avatar-image");
+  if (removeAvatar) {
+    const form = document.querySelector("#profileForm");
+    if (form) {
+      form.elements.avatar_image.value = "";
+      form.elements.avatar_file.value = "";
+      const preview = document.querySelector(".profile-preview .avatar");
+      preview.textContent = form.elements.avatar_text.value || currentUser.name[0] || "员";
+      removeAvatar.disabled = true;
+      showToast("图片头像已移除，保存后生效");
+    }
+  }
 
   const go = event.target.closest("[data-go]");
   if (go) renderPage(go.dataset.go);
@@ -1544,12 +1572,62 @@ document.querySelector("#globalSearch").addEventListener("input", event => {
 });
 
 document.addEventListener("change", event => {
+  if (event.target.matches('input[name="avatar_file"]')) {
+    handleAvatarFile(event.target);
+    return;
+  }
   if (!event.target.matches(".schedule-date-picker")) return;
   const pickedDate = dateFromInput(event.target.value);
   activeWeekStart = startOfWeek(pickedDate);
   activeScheduleDay = weekdayIndexForDate(pickedDate);
   renderSchedule();
 });
+
+async function handleAvatarFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    showToast("头像仅支持 JPG、PNG 或 WebP");
+    input.value = "";
+    return;
+  }
+  try {
+    const dataUrl = await compressAvatarImage(file);
+    document.querySelector('#profileForm input[name="avatar_image"]').value = dataUrl;
+    const preview = document.querySelector(".profile-preview .avatar");
+    preview.innerHTML = `<img src="${dataUrl}" alt="头像预览" />`;
+    document.querySelector(".remove-avatar-image").disabled = false;
+    showToast("头像已预览，保存后生效");
+  } catch (error) {
+    showToast(error.message);
+    input.value = "";
+  }
+}
+
+function compressAvatarImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("读取图片失败"));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("图片格式无法识别"));
+      image.onload = () => {
+        const size = 256;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const context = canvas.getContext("2d");
+        const minSide = Math.min(image.width, image.height);
+        const sx = (image.width - minSide) / 2;
+        const sy = (image.height - minSide) / 2;
+        context.drawImage(image, sx, sy, minSide, minSide, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 document.addEventListener("keydown", event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
