@@ -48,7 +48,7 @@ ROLE_LABELS = {
 ROLE_PERMISSIONS = {
     "owner": {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
-        "roster:write", "leads:read", "leads:write", "hours:read", "teaching:read",
+        "roster:write", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read",
         "settings:read", "settings:write",
     },
     "academic": {
@@ -57,7 +57,7 @@ ROLE_PERMISSIONS = {
     },
     "teacher": {"dashboard:read", "students:read", "catalog:read", "teaching:read"},
     "sales": {"dashboard:read", "students:read", "students:write", "leads:read", "leads:write"},
-    "finance": {"dashboard:read", "students:read", "hours:read"},
+    "finance": {"dashboard:read", "students:read", "hours:read", "hours:write"},
 }
 
 SEED_USERS = [
@@ -104,6 +104,12 @@ SEED_CLASSES = [
 ]
 
 LEAD_STAGES = ("新线索", "已联系", "待试听", "待报名", "已报名", "无效")
+HOUR_ACTIONS = {
+    "purchase": ("购买课时", 1),
+    "consume": ("上课消课", -1),
+    "return": ("请假返还", 1),
+    "deduct": ("手动扣减", -1),
+}
 
 SEED_LEADS = [
     ("林可昕", 7, "139****1021", "大众点评", "新线索", "主持", "希望改善胆小、不敢表达的问题", ""),
@@ -276,7 +282,7 @@ def translate_postgres_sql(sql: str) -> str:
 
 
 def should_return_id(sql: str) -> bool:
-    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads)\b", sql, re.IGNORECASE))
+    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|hour_transactions)\b", sql, re.IGNORECASE))
 
 
 def postgres_schema(script: str) -> str:
@@ -544,6 +550,22 @@ def initialize_database() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
             CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);
+
+            CREATE TABLE IF NOT EXISTS hour_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                action TEXT NOT NULL,
+                amount REAL NOT NULL CHECK (amount > 0),
+                delta REAL NOT NULL,
+                balance_after REAL NOT NULL CHECK (balance_after >= 0),
+                note TEXT NOT NULL DEFAULT '',
+                operator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                occurred_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_hour_transactions_student ON hour_transactions(student_id);
+            CREATE INDEX IF NOT EXISTS idx_hour_transactions_created ON hour_transactions(created_at);
             """
         db.executescript(postgres_schema(schema_sql) if DATABASE_KIND == "postgres" else schema_sql)
         ensure_user_schema(db)
@@ -652,6 +674,11 @@ def number_value(payload: dict, key: str, label: str, minimum: float = 0) -> flo
     if value < minimum:
         raise ValueError(f"{label}不能小于 {minimum:g}")
     return value
+
+
+def format_number(value: float) -> str:
+    number = float(value)
+    return str(int(number)) if number.is_integer() else f"{number:g}"
 
 
 def integer_value(payload: dict, key: str, label: str, minimum: int = 0) -> int:
@@ -832,6 +859,29 @@ def validate_lead(payload: dict) -> dict:
         "note": str(payload.get("note", "")).strip(),
         "next_follow_at": str(payload.get("next_follow_at", "")).strip(),
     }
+
+
+def validate_hour_transaction(payload: dict) -> dict:
+    action = str(payload.get("action", "")).strip()
+    if action not in HOUR_ACTIONS:
+        raise ValueError("课时变动类型无效")
+    return {
+        "student_id": integer_value(payload, "student_id", "学员", 1),
+        "action": action,
+        "amount": number_value(payload, "amount", "课时数", 0.5),
+        "note": str(payload.get("note", "")).strip(),
+        "occurred_at": str(payload.get("occurred_at", "")).strip() or datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def hour_transaction_to_dict(row: sqlite3.Row) -> dict:
+    item = dict(row)
+    for key in ("amount", "delta", "balance_after"):
+        item[key] = float(item[key])
+        if item[key].is_integer():
+            item[key] = int(item[key])
+    item["action_label"] = HOUR_ACTIONS.get(item["action"], (item["action"], 0))[0]
+    return item
 
 
 def validate_student(payload: dict, partial: bool = False) -> dict:
@@ -1036,6 +1086,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.get_dashboard()
             return
+        if parsed.path == "/api/hour-transactions":
+            if not self.require_permission("hours:read"):
+                return
+            self.get_hour_transactions()
+            return
         if parsed.path == "/api/leads":
             if not self.require_permission("leads:read"):
                 return
@@ -1096,6 +1151,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("leads:write"):
                 return
             self.create_lead()
+            return
+        if path == "/api/hour-transactions":
+            if not self.require_permission("hours:write"):
+                return
+            self.create_hour_transaction()
             return
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "students":
@@ -1338,6 +1398,67 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.NOT_FOUND, "线索不存在")
             return
         self.send_json({"deleted": True, "id": lead_id})
+
+    def get_hour_transactions(self) -> None:
+        with connect() as db:
+            rows = db.execute(
+                """
+                SELECT h.*, s.name AS student_name, s.course AS course_name, u.name AS operator_name
+                FROM hour_transactions h
+                JOIN students s ON s.id = h.student_id
+                LEFT JOIN users u ON u.id = h.operator_id
+                ORDER BY h.occurred_at DESC, h.id DESC
+                LIMIT 200
+                """
+            ).fetchall()
+        self.send_json([hour_transaction_to_dict(row) for row in rows])
+
+    def create_hour_transaction(self) -> None:
+        try:
+            data = validate_hour_transaction(self.read_json())
+            label, sign = HOUR_ACTIONS[data["action"]]
+            delta = data["amount"] * sign
+            now = datetime.now().isoformat(timespec="seconds")
+            current_user = self.current_user()
+            with connect() as db:
+                student = db.execute("SELECT * FROM students WHERE id = ?", (data["student_id"],)).fetchone()
+                if not student:
+                    raise ValueError("学员不存在")
+                balance_after = float(student["hours"]) + delta
+                if balance_after < 0:
+                    raise ValueError(f"{student['name']} 当前仅剩 {format_number(student['hours'])} 课时，不能{label} {format_number(data['amount'])} 课时")
+                db.execute(
+                    "UPDATE students SET hours = ?, updated_at = ? WHERE id = ?",
+                    (balance_after, now, data["student_id"]),
+                )
+                cursor = db.execute(
+                    """
+                    INSERT INTO hour_transactions
+                        (student_id, action, amount, delta, balance_after, note, operator_id, occurred_at, created_at)
+                    VALUES (:student_id, :action, :amount, :delta, :balance_after, :note, :operator_id, :occurred_at, :created_at)
+                    """,
+                    {
+                        **data,
+                        "delta": delta,
+                        "balance_after": balance_after,
+                        "operator_id": current_user["id"] if current_user else None,
+                        "created_at": now,
+                    },
+                )
+                row = db.execute(
+                    """
+                    SELECT h.*, s.name AS student_name, s.course AS course_name, u.name AS operator_name
+                    FROM hour_transactions h
+                    JOIN students s ON s.id = h.student_id
+                    LEFT JOIN users u ON u.id = h.operator_id
+                    WHERE h.id = ?
+                    """,
+                    (cursor.lastrowid,),
+                ).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(hour_transaction_to_dict(row), HTTPStatus.CREATED)
 
     def get_users(self) -> None:
         with connect() as db:

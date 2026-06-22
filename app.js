@@ -4,6 +4,7 @@ let students = [];
 let catalog = { courses: [], classes: [], teachers: [], rooms: [] };
 let users = [];
 let leads = [];
+let hourTransactions = [];
 let catalogView = "courses";
 let activeWeekStart = startOfWeek(new Date());
 let activeScheduleDay = todayScheduleIndex();
@@ -123,6 +124,10 @@ async function loadUsers() {
 
 async function loadLeads() {
   leads = await api("/api/leads");
+}
+
+async function loadHourTransactions() {
+  hourTransactions = await api("/api/hour-transactions");
 }
 
 function showLogin(message = "") {
@@ -700,23 +705,51 @@ async function updateLeadStage(leadId, stage) {
 }
 
 function renderHours() {
+  const totalHours = students.reduce((sum, student) => sum + Number(student.hours || 0), 0);
+  const renewalStudents = students.filter(student => Number(student.hours || 0) <= 4 && student.status !== "停课");
+  const monthKey = toDateInputValue(new Date()).slice(0, 7);
+  const consumedThisMonth = hourTransactions
+    .filter(item => item.action === "consume" && String(item.occurred_at || item.created_at).startsWith(monthKey))
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const canManageHours = can("hours:write");
   pageContent.innerHTML = `
     <div class="hours-summary">
-      <div class="summary-card"><span>本月已消课</span><strong>428.5</strong><span class="positive">较上月 +7.2%</span></div>
-      <div class="summary-card"><span>剩余课时总量</span><strong>3,682</strong><span>覆盖 186 名在读学员</span></div>
-      <div class="summary-card"><span>30 天内待续费</span><strong>12 人</strong><span class="negative">预计课时缺口 96 节</span></div>
+      <div class="summary-card"><span>本月已消课</span><strong>${formatHours(consumedThisMonth)}</strong><span>来自课时流水</span></div>
+      <div class="summary-card"><span>剩余课时总量</span><strong>${formatHours(totalHours)}</strong><span>覆盖 ${students.length} 名学员</span></div>
+      <div class="summary-card"><span>低课时待跟进</span><strong>${renewalStudents.length} 人</strong><span class="${renewalStudents.length ? "negative" : "positive"}">4 课时及以下</span></div>
     </div>
-    <div class="section-toolbar"><div><h2>最近课时流水</h2><p>每笔课时变动均可追溯</p></div><button class="secondary-button">导出流水</button></div>
+    ${canManageHours ? `<section class="panel hours-form-panel">
+      <div class="panel-header"><div class="panel-title"><h2>新增课时变动</h2><p>购买、消课、返还和手动扣减都会生成可追溯流水</p></div></div>
+      <form id="hoursForm" class="hours-form">
+        <label><span>学员</span><select name="student_id" required>${students.map(student => `<option value="${student.id}">${escapeHtml(student.name)} · 剩余 ${formatHours(student.hours)} 课时</option>`).join("")}</select></label>
+        <label><span>变动类型</span><select name="action"><option value="purchase">购买课时</option><option value="consume">上课消课</option><option value="return">请假返还</option><option value="deduct">手动扣减</option></select></label>
+        <label><span>课时数</span><input name="amount" required type="number" min="0.5" step="0.5" value="1" /></label>
+        <label><span>发生时间</span><input name="occurred_at" type="datetime-local" value="${defaultDateTimeLocal()}" /></label>
+        <label class="full"><span>备注</span><input name="note" placeholder="例如：购买 24 课时 / 6月22日主持基础班消课" /></label>
+        <div class="hours-form-actions"><button type="submit" class="primary-button" id="saveHours">保存课时流水</button></div>
+      </form>
+    </section>` : `<div class="roster-readonly">当前角色只能查看课时流水，不能新增课时变动。</div>`}
+    <div class="section-toolbar"><div><h2>最近课时流水</h2><p>每笔课时变动均可追溯，最多显示最近 200 条</p></div></div>
     <div class="table-card"><table class="data-table"><thead><tr><th>时间</th><th>学员</th><th>变动类型</th><th>课程</th><th>课时变动</th><th>操作人</th></tr></thead>
       <tbody>
-        ${[
-          ["今天 16:02", "周亦辰", "上课消课", "朗诵表达进阶班", "-1.5", "苏老师"],
-          ["今天 15:35", "顾言溪", "上课消课", "少儿主持基础班", "-1.5", "陈老师"],
-          ["今天 11:20", "沈嘉树", "购买课时", "演讲与口才一对一", "+12", "林知夏"],
-          ["昨天 19:42", "许星禾", "请假返还", "舞台表演启蒙班", "+1", "系统"],
-          ["昨天 18:31", "陆小满", "上课消课", "少儿主持基础班", "-1.5", "陈老师"],
-        ].map(r => `<tr>${r.map((cell, i) => `<td>${i === 4 ? `<strong class="${cell.startsWith("+") ? "positive" : "negative"}">${cell}</strong>` : cell}</td>`).join("")}</tr>`).join("")}
+        ${hourTransactions.length ? hourTransactions.map(item => {
+          const delta = Number(item.delta || 0);
+          return `<tr>
+            <td>${formatShortTime(item.occurred_at || item.created_at)}</td>
+            <td><strong>${escapeHtml(item.student_name)}</strong><br><small>余额 ${formatHours(item.balance_after)} 课时</small></td>
+            <td>${escapeHtml(item.action_label)}</td>
+            <td>${escapeHtml(item.course_name || "未分配课程")}</td>
+            <td><strong class="${delta >= 0 ? "positive" : "negative"}">${delta >= 0 ? "+" : ""}${formatHours(delta)}</strong></td>
+            <td>${escapeHtml(item.operator_name || "系统")}<br><small>${escapeHtml(item.note || "无备注")}</small></td>
+          </tr>`;
+        }).join("") : `<tr><td colspan="6"><div class="empty-state">还没有课时流水，先新增一笔购买或消课记录。</div></td></tr>`}
       </tbody></table></div>`;
+}
+
+function defaultDateTimeLocal() {
+  const date = new Date();
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 16);
 }
 
 function renderPlaceholder(type) {
@@ -814,10 +847,13 @@ async function renderPage(page, query = "") {
       await loadLeads();
       renderLeads();
     }
+    if (page === "hours") {
+      await Promise.all([loadStudents(), loadHourTransactions()]);
+      renderHours();
+    }
   } catch (error) {
     renderConnectionError(error.message);
   }
-  if (page === "hours") renderHours();
   if (page === "teaching") renderPlaceholder(page);
   document.querySelector(".sidebar").classList.remove("open");
 }
@@ -1250,6 +1286,35 @@ document.querySelector("#managementForm").addEventListener("submit", async event
 document.querySelector("#leadForm").addEventListener("submit", saveLead);
 
 document.addEventListener("submit", async event => {
+  if (event.target.id === "hoursForm") {
+    event.preventDefault();
+    if (!can("hours:write")) {
+      showToast("当前角色不能新增课时流水");
+      return;
+    }
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    data.student_id = Number(data.student_id);
+    data.amount = Number(data.amount);
+    const button = document.querySelector("#saveHours");
+    button.classList.add("button-loading");
+    button.textContent = "保存中...";
+    try {
+      await api("/api/hour-transactions", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+      showToast("课时流水已保存");
+      await Promise.all([loadStudents(), loadHourTransactions()]);
+      renderHours();
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.classList.remove("button-loading");
+      button.textContent = "保存课时流水";
+    }
+    return;
+  }
   if (event.target.id !== "userForm") return;
   event.preventDefault();
   if (!can("settings:write")) {
