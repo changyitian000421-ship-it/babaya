@@ -264,6 +264,9 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
 .day-button span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 9px; }.day-button strong { font-size: 14px; }
 .day-button.active { border-color: var(--accent); color: white; background: var(--accent); }.day-button.active span { color: #ffe4dd; }
 .schedule-board { display: grid; grid-template-columns: 74px 1fr; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--white); }
+.schedule-tools { flex-wrap: wrap; }
+.schedule-date-picker { height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--white); font-size: 11px; }
+.schedule-date-picker:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .time-rail { padding-top: 22px; background: #faf8f4; }.time-slot { height: 84px; padding-right: 14px; color: var(--muted); font-size: 10px; text-align: right; }
 .schedule-lane { position: relative; padding: 18px 18px 6px; }
 .schedule-event { display: grid; grid-template-columns: 8px 1fr auto; gap: 12px; align-items: center; min-height: 67px; margin-bottom: 17px; padding: 13px 15px; border: 1px solid #eee9e4; border-radius: 14px; background: #fffefa; }

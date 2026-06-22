@@ -364,19 +364,7 @@ def user_to_dict(row: sqlite3.Row) -> dict:
 
 
 def ensure_user_schema(db: sqlite3.Connection) -> None:
-    if DATABASE_KIND == "postgres":
-        columns = {
-            row["name"]
-            for row in db.execute(
-                """
-                SELECT column_name AS name
-                FROM information_schema.columns
-                WHERE table_name = 'users'
-                """
-            ).fetchall()
-        }
-    else:
-        columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
+    columns = table_columns(db, "users")
     if "phone" not in columns:
         db.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
     for username, phone, _password, _name, _role in SEED_USERS:
@@ -386,6 +374,33 @@ def ensure_user_schema(db: sqlite3.Connection) -> None:
         )
     db.execute("UPDATE users SET phone = username WHERE phone = ''")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
+
+
+def table_columns(db: sqlite3.Connection, table: str) -> set[str]:
+    if DATABASE_KIND == "postgres":
+        return {
+            row["name"]
+            for row in db.execute(
+                """
+                SELECT column_name AS name
+                FROM information_schema.columns
+                WHERE table_name = ?
+                """,
+                (table,),
+            ).fetchall()
+        }
+    return {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def ensure_class_schedule_schema(db: sqlite3.Connection) -> None:
+    columns = table_columns(db, "classes")
+    if "start_date" not in columns:
+        db.execute("ALTER TABLE classes ADD COLUMN start_date TEXT NOT NULL DEFAULT ''")
+    if "end_date" not in columns:
+        db.execute("ALTER TABLE classes ADD COLUMN end_date TEXT NOT NULL DEFAULT ''")
+    current_year = datetime.now().year
+    db.execute("UPDATE classes SET start_date = ? WHERE start_date = ''", (f"{current_year}-01-01",))
+    db.execute("UPDATE classes SET end_date = ? WHERE end_date = ''", (f"{current_year}-12-31",))
 
 
 def validate_user(payload: dict, existing: sqlite3.Row | None = None) -> dict:
@@ -469,6 +484,8 @@ def initialize_database() -> None:
                 course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE RESTRICT,
                 teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE RESTRICT,
                 room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE RESTRICT,
+                start_date TEXT NOT NULL DEFAULT '',
+                end_date TEXT NOT NULL DEFAULT '',
                 weekday INTEGER NOT NULL CHECK (weekday BETWEEN 0 AND 6),
                 start_time TEXT NOT NULL,
                 duration INTEGER NOT NULL CHECK (duration > 0),
@@ -530,6 +547,7 @@ def initialize_database() -> None:
             """
         db.executescript(postgres_schema(schema_sql) if DATABASE_KIND == "postgres" else schema_sql)
         ensure_user_schema(db)
+        ensure_class_schedule_schema(db)
         now = datetime.now().isoformat(timespec="seconds")
         count = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
         if count == 0:
@@ -570,10 +588,14 @@ def initialize_database() -> None:
                 db.execute(
                     """
                     INSERT INTO classes
-                        (name, course_id, teacher_id, room_id, weekday, start_time, duration, capacity, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (name, course_id, teacher_id, room_id, start_date, end_date, weekday, start_time, duration, capacity, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (name, course_id, teacher_id, room_id, weekday, start_time, duration, capacity, status, now, now),
+                    (
+                        name, course_id, teacher_id, room_id,
+                        f"{datetime.now().year}-01-01", f"{datetime.now().year}-12-31",
+                        weekday, start_time, duration, capacity, status, now, now,
+                    ),
                 )
         if db.execute("SELECT COUNT(*) FROM class_students").fetchone()[0] == 0:
             students = db.execute("SELECT id, course FROM students").fetchall()
@@ -639,6 +661,27 @@ def integer_value(payload: dict, key: str, label: str, minimum: int = 0) -> int:
     return int(value)
 
 
+def date_value(payload: dict, key: str, label: str) -> str:
+    value = str(payload.get(key, "")).strip()
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
+    except ValueError as exc:
+        raise ValueError(f"{label}格式无效，请选择日期") from exc
+
+
+def time_minutes(value: str, label: str) -> int:
+    if len(value) != 5 or value[2] != ":":
+        raise ValueError(f"{label}格式无效")
+    try:
+        hour = int(value[:2])
+        minute = int(value[3:])
+    except ValueError as exc:
+        raise ValueError(f"{label}格式无效") from exc
+    if hour > 23 or minute > 59:
+        raise ValueError(f"{label}格式无效")
+    return hour * 60 + minute
+
+
 def validate_course(payload: dict) -> dict:
     required = ("name", "category", "age_range")
     if any(not str(payload.get(key, "")).strip() for key in required):
@@ -687,21 +730,35 @@ def validate_room(payload: dict) -> dict:
 def validate_class(payload: dict, db: sqlite3.Connection) -> dict:
     if not str(payload.get("name", "")).strip():
         raise ValueError("班级名称不能为空")
+    start_date = date_value(payload, "start_date", "开课日期")
+    end_date = date_value(payload, "end_date", "结课日期")
+    if end_date < start_date:
+        raise ValueError("结课日期不能早于开课日期")
+    start_time = str(payload.get("start_time", "")).strip()
+    start_minutes = time_minutes(start_time, "开始时间")
+    end_time = str(payload.get("end_time", "")).strip()
+    if end_time:
+        end_minutes = time_minutes(end_time, "结束时间")
+        if end_minutes <= start_minutes:
+            raise ValueError("结束时间必须晚于开始时间")
+        duration = end_minutes - start_minutes
+    else:
+        duration = integer_value(payload, "duration", "课程时长", 15)
     data = {
         "name": str(payload["name"]).strip(),
         "course_id": integer_value(payload, "course_id", "课程"),
         "teacher_id": integer_value(payload, "teacher_id", "教师"),
         "room_id": integer_value(payload, "room_id", "教室"),
+        "start_date": start_date,
+        "end_date": end_date,
         "weekday": integer_value(payload, "weekday", "上课星期"),
-        "start_time": str(payload.get("start_time", "")).strip(),
-        "duration": integer_value(payload, "duration", "课程时长", 15),
+        "start_time": start_time,
+        "duration": duration,
         "capacity": integer_value(payload, "capacity", "班级容量", 1),
         "status": str(payload.get("status", "招生中")).strip(),
     }
     if data["weekday"] > 6:
         raise ValueError("上课星期无效")
-    if len(data["start_time"]) != 5 or data["start_time"][2] != ":":
-        raise ValueError("上课时间格式无效")
     if data["status"] not in {"招生中", "进行中", "已结课", "暂停"}:
         raise ValueError("班级状态无效")
     for table, key, label in (
@@ -738,7 +795,14 @@ def class_to_dict(row: sqlite3.Row, students: list[dict] | None = None) -> dict:
     item = dict(row)
     item["students"] = students or []
     item["current"] = len(item["students"])
+    item["end_time"] = minutes_to_time(time_minutes(item["start_time"], "开始时间") + int(item["duration"]))
     return item
+
+
+def minutes_to_time(total_minutes: int) -> str:
+    hour = (total_minutes // 60) % 24
+    minute = total_minutes % 60
+    return f"{hour:02d}:{minute:02d}"
 
 
 def lead_to_dict(row: sqlite3.Row) -> dict:
@@ -1567,8 +1631,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 cursor = db.execute(
                     """
                     INSERT INTO classes
-                        (name, course_id, teacher_id, room_id, weekday, start_time, duration, capacity, status, created_at, updated_at)
-                    VALUES (:name, :course_id, :teacher_id, :room_id, :weekday, :start_time, :duration, :capacity, :status, :created_at, :updated_at)
+                        (name, course_id, teacher_id, room_id, start_date, end_date, weekday, start_time, duration, capacity, status, created_at, updated_at)
+                    VALUES (:name, :course_id, :teacher_id, :room_id, :start_date, :end_date, :weekday, :start_time, :duration, :capacity, :status, :created_at, :updated_at)
                     """,
                     {**data, "created_at": now, "updated_at": now},
                 )
@@ -1596,7 +1660,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     """
                     UPDATE classes SET
                         name=:name, course_id=:course_id, teacher_id=:teacher_id, room_id=:room_id,
-                        weekday=:weekday, start_time=:start_time, duration=:duration,
+                        start_date=:start_date, end_date=:end_date, weekday=:weekday, start_time=:start_time, duration=:duration,
                         capacity=:capacity, status=:status, updated_at=:updated_at
                     WHERE id=:id
                     """,

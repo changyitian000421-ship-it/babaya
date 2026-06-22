@@ -5,6 +5,7 @@ let catalog = { courses: [], classes: [], teachers: [], rooms: [] };
 let users = [];
 let leads = [];
 let catalogView = "courses";
+let activeWeekStart = startOfWeek(new Date());
 let activeScheduleDay = todayScheduleIndex();
 let dashboardStats = {
   totalStudents: 0,
@@ -74,6 +75,14 @@ function icon(id) {
 function todayScheduleIndex() {
   const day = new Date().getDay();
   return day === 0 ? 6 : day - 1;
+}
+
+function startOfWeek(date) {
+  const value = new Date(date);
+  const offset = value.getDay() === 0 ? -6 : 1 - value.getDay();
+  value.setDate(value.getDate() + offset);
+  value.setHours(0, 0, 0, 0);
+  return value;
 }
 
 async function api(path, options = {}) {
@@ -372,7 +381,8 @@ function renderClassGrid() {
         <span class="tag" style="--tag-color:${classStatusColor(item.status)}">${escapeHtml(item.status)}</span>
       </div>
       <div class="class-details">
-        <div class="class-detail"><span>上课时间</span><strong>${weekdayName(item.weekday)} ${escapeHtml(item.start_time)} · ${item.duration} 分钟</strong></div>
+        <div class="class-detail"><span>上课时间</span><strong>${weekdayName(item.weekday)} ${escapeHtml(item.start_time)}-${escapeHtml(classEndTime(item))}</strong></div>
+        <div class="class-detail"><span>周期范围</span><strong>${escapeHtml(item.start_date)} 至 ${escapeHtml(item.end_date)}</strong></div>
         <div class="class-detail"><span>授课教师</span><strong>${escapeHtml(item.teacher_name)}</strong></div>
         <div class="class-detail"><span>上课教室</span><strong>${escapeHtml(item.room_name)} · ${escapeHtml(item.room_code)}</strong></div>
         <div class="class-detail"><span>班级编号</span><strong>B${String(item.id).padStart(3, "0")}</strong></div>
@@ -448,15 +458,26 @@ function classStatusColor(status) {
 function renderSchedule() {
   const days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
   const weekDates = currentWeekDates();
+  const activeDate = weekDates[activeScheduleDay];
+  const activeDateValue = toDateInputValue(activeDate);
   const activeClasses = catalog.classes
-    .filter(item => Number(item.weekday) === activeScheduleDay)
+    .filter(item => classOccursOnDate(item, activeDate))
     .sort((a, b) => a.start_time.localeCompare(b.start_time));
-  const weeklyCount = catalog.classes.filter(item => ["招生中", "进行中"].includes(item.status)).length;
-  const weeklyCapacity = catalog.classes.reduce((sum, item) => sum + Number(item.current || 0), 0);
+  const weeklyOccurrences = weekDates.reduce(
+    (sum, date) => sum + catalog.classes.filter(item => classOccursOnDate(item, date)).length,
+    0,
+  );
+  const activeStudents = activeClasses.reduce((sum, item) => sum + Number(item.current || 0), 0);
   pageContent.innerHTML = `
     <div class="section-toolbar">
-      <div><h2>${formatWeekRange(weekDates)}</h2><p>本周 ${weeklyCount} 个活跃班级，已分班 ${weeklyCapacity} 人</p></div>
-      <div class="toolbar-actions"><button class="secondary-button schedule-today">今天</button>${can("catalog:write") ? `<button class="primary-button schedule-new-class">${icon("plus")} 新建班级</button>` : ""}</div>
+      <div><h2>${formatWeekRange(weekDates)}</h2><p>${formatFullDate(activeDate)}：${activeClasses.length} 节课，预计到课 ${activeStudents} 人；本周共 ${weeklyOccurrences} 节</p></div>
+      <div class="toolbar-actions schedule-tools">
+        <button class="secondary-button schedule-prev-week">上一周</button>
+        <input class="schedule-date-picker" type="date" value="${activeDateValue}" aria-label="选择课表日期" />
+        <button class="secondary-button schedule-next-week">下一周</button>
+        <button class="secondary-button schedule-today">今天</button>
+        ${can("catalog:write") ? `<button class="primary-button schedule-new-class">${icon("plus")} 新建班级</button>` : ""}
+      </div>
     </div>
     <div class="week-strip">${days.map((day, index) => `<button class="day-button ${index === activeScheduleDay ? "active" : ""}" data-schedule-day="${index}"><span>${day}</span><strong>${weekDates[index].getDate()}</strong></button>`).join("")}</div>
     <div class="schedule-board">
@@ -464,22 +485,16 @@ function renderSchedule() {
       <div class="schedule-lane">
         ${activeClasses.length ? activeClasses.map(item => `<article class="schedule-event" style="--event-color:${escapeHtml(item.course_color)}">
           <span class="color-pill"></span>
-          <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.start_time)} · ${item.duration} 分钟 · ${escapeHtml(item.room_name)} ${escapeHtml(item.room_code)} · ${escapeHtml(item.course_name)}</small></div>
+          <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.start_time)}-${escapeHtml(classEndTime(item))} · ${escapeHtml(item.room_name)} ${escapeHtml(item.room_code)} · ${escapeHtml(item.course_name)} · ${escapeHtml(item.start_date)} 至 ${escapeHtml(item.end_date)}</small></div>
           <div class="schedule-meta"><b>${escapeHtml(item.teacher_name)}</b>${item.current}/${item.capacity} 人<br><button class="text-button manage-roster" data-id="${item.id}">花名册</button></div>
-        </article>`).join("") : `<div class="empty-state">这一天还没有排课，可以到「课程与班级」中新建班级。</div>`}
+        </article>`).join("") : `<div class="empty-state">这一天还没有排课，可以切换日期回溯/查看未来，或新建周期班级。</div>`}
       </div>
     </div>`;
 }
 
 function currentWeekDates() {
-  const today = new Date();
-  const monday = new Date(today);
-  const offset = today.getDay() === 0 ? -6 : 1 - today.getDay();
-  monday.setDate(today.getDate() + offset);
   return Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(monday);
-    date.setDate(monday.getDate() + index);
-    return date;
+    return addDays(activeWeekStart, index);
   });
 }
 
@@ -492,6 +507,49 @@ function formatWeekRange(dates) {
 function scheduleTimeSlots(items) {
   const slots = [...new Set(items.map(item => item.start_time))];
   return slots.length ? slots : ["09:00", "14:00", "18:30"];
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function toDateInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateFromInput(value) {
+  const [year, month, day] = String(value).split("-").map(Number);
+  if (!year || !month || !day) return new Date();
+  return new Date(year, month - 1, day);
+}
+
+function weekdayIndexForDate(date) {
+  const day = date.getDay();
+  return day === 0 ? 6 : day - 1;
+}
+
+function formatFullDate(date) {
+  return `${date.getFullYear()} 年 ${date.getMonth() + 1} 月 ${date.getDate()} 日`;
+}
+
+function classOccursOnDate(item, date) {
+  const value = toDateInputValue(date);
+  return Number(item.weekday) === weekdayIndexForDate(date)
+    && (!item.start_date || item.start_date <= value)
+    && (!item.end_date || item.end_date >= value)
+    && ["招生中", "进行中"].includes(item.status);
+}
+
+function classEndTime(item) {
+  if (item.end_time) return item.end_time;
+  const [hour, minute] = String(item.start_time).split(":").map(Number);
+  const total = hour * 60 + minute + Number(item.duration || 0);
+  return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function renderLeads() {
@@ -865,6 +923,9 @@ function openCourseModal(course = null) {
 function openClassModal(item = null) {
   const form = document.querySelector("#managementForm");
   form.reset();
+  const selectedDate = currentWeekDates()[activeScheduleDay] || new Date();
+  const defaultStartDate = toDateInputValue(selectedDate);
+  const defaultEndDate = toDateInputValue(addDays(selectedDate, 90));
   form.elements.type.value = "class";
   form.elements.id.value = item?.id || "";
   document.querySelector("#managementTitle").textContent = item ? "编辑班级" : "新建班级";
@@ -875,9 +936,11 @@ function openClassModal(item = null) {
     <label><span>课程产品</span><select name="course_id">${catalog.courses.filter(course => course.status === "启用" || course.id === item?.course_id).map(course => `<option value="${course.id}" ${course.id === item?.course_id ? "selected" : ""}>${escapeHtml(course.name)}</option>`).join("")}</select></label>
     <label><span>授课教师</span><select name="teacher_id">${catalog.teachers.map(teacher => `<option value="${teacher.id}" ${teacher.id === item?.teacher_id ? "selected" : ""}>${escapeHtml(teacher.display_name)} · ${escapeHtml(teacher.specialty)}</option>`).join("")}</select></label>
     <label><span>上课教室</span><select name="room_id">${catalog.rooms.map(room => `<option value="${room.id}" ${room.id === item?.room_id ? "selected" : ""}>${escapeHtml(room.name)} ${escapeHtml(room.code)}（${room.capacity}人）</option>`).join("")}</select></label>
-    <label><span>每周上课日</span><select name="weekday">${["周一","周二","周三","周四","周五","周六","周日"].map((day, index) => `<option value="${index}" ${index === (item?.weekday ?? 5) ? "selected" : ""}>${day}</option>`).join("")}</select></label>
+    <label><span>开课日期</span><input name="start_date" required type="date" value="${escapeHtml(item?.start_date || defaultStartDate)}" /></label>
+    <label><span>结课日期</span><input name="end_date" required type="date" value="${escapeHtml(item?.end_date || defaultEndDate)}" /></label>
+    <label><span>每周上课日</span><select name="weekday">${["周一","周二","周三","周四","周五","周六","周日"].map((day, index) => `<option value="${index}" ${index === (item?.weekday ?? activeScheduleDay) ? "selected" : ""}>${day}</option>`).join("")}</select></label>
     <label><span>开始时间</span><input name="start_time" required type="time" value="${escapeHtml(item?.start_time || "14:00")}" /></label>
-    <label><span>单节时长（分钟）</span><input name="duration" required type="number" min="15" step="5" value="${item?.duration ?? 90}" /></label>
+    <label><span>结束时间</span><input name="end_time" required type="time" value="${escapeHtml(item ? classEndTime(item) : "15:30")}" /></label>
     <label><span>班级容量</span><input name="capacity" required type="number" min="1" value="${item?.capacity ?? 10}" /></label>
     <label><span>班级状态</span><select name="status">${["招生中","进行中","已结课","暂停"].map(status => `<option ${status === (item?.status || "招生中") ? "selected" : ""}>${status}</option>`).join("")}</select></label>`;
   document.querySelector("#managementBackdrop").hidden = false;
@@ -970,7 +1033,18 @@ document.addEventListener("click", async event => {
     renderSchedule();
   }
 
+  if (event.target.closest(".schedule-prev-week")) {
+    activeWeekStart = addDays(activeWeekStart, -7);
+    renderSchedule();
+  }
+
+  if (event.target.closest(".schedule-next-week")) {
+    activeWeekStart = addDays(activeWeekStart, 7);
+    renderSchedule();
+  }
+
   if (event.target.closest(".schedule-today")) {
+    activeWeekStart = startOfWeek(new Date());
     activeScheduleDay = todayScheduleIndex();
     renderSchedule();
   }
@@ -1207,6 +1281,14 @@ document.addEventListener("submit", async event => {
 
 document.querySelector("#globalSearch").addEventListener("input", event => {
   if (event.target.value.trim()) renderPage("students", event.target.value);
+});
+
+document.addEventListener("change", event => {
+  if (!event.target.matches(".schedule-date-picker")) return;
+  const pickedDate = dateFromInput(event.target.value);
+  activeWeekStart = startOfWeek(pickedDate);
+  activeScheduleDay = weekdayIndexForDate(pickedDate);
+  renderSchedule();
 });
 
 document.addEventListener("keydown", event => {
