@@ -31,15 +31,16 @@ const pageMeta = {
   leads: ["招生中心", "招生跟进"],
   hours: ["财务与课消", "课时管理"],
   teaching: ["教学管理", "教学中心"],
+  account: ["个人中心", "账号设置"],
   settings: ["系统配置", "系统设置"],
 };
 
 const rolePages = {
-  owner: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching", "settings"],
-  academic: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching"],
-  teacher: ["dashboard", "schedule", "hours", "leads", "teaching", "students", "catalog"],
-  sales: ["dashboard", "leads", "students"],
-  finance: ["dashboard", "hours", "leads", "students"],
+  owner: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching", "account", "settings"],
+  academic: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching", "account"],
+  teacher: ["dashboard", "schedule", "hours", "leads", "teaching", "students", "catalog", "account"],
+  sales: ["dashboard", "leads", "students", "account"],
+  finance: ["dashboard", "hours", "leads", "students", "account"],
 };
 
 const roleOptions = [
@@ -150,7 +151,9 @@ function applyRoleUi() {
   document.querySelector(".global-search").hidden = !can("students:read");
   document.querySelector("#profileName").textContent = currentUser?.name || "未登录";
   document.querySelector("#profileRole").textContent = currentUser?.roleLabel || "";
-  document.querySelector("#profileAvatar").textContent = (currentUser?.name || "声")[0];
+  const avatar = document.querySelector("#profileAvatar");
+  avatar.textContent = currentUser?.avatarText || (currentUser?.name || "声")[0];
+  avatar.style.setProperty("--profile-color", currentUser?.avatarColor || "#ff9f1c");
 }
 
 async function loadSession() {
@@ -862,7 +865,7 @@ function renderSettings() {
           <label><span>登录手机号</span><input name="phone" required placeholder="例如：13800000006" /></label>
           <label><span>员工姓名</span><input name="name" required placeholder="例如：王老师" /></label>
           <label><span>角色</span><select name="role">${roleOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
-          <label><span>密码</span><input name="password" type="password" placeholder="新增时至少 6 位；编辑时留空表示不修改" /></label>
+          <div class="account-default-password"><strong>初始密码：000000</strong><span>新员工首次登录后可在个人设置中修改密码。</span></div>
           <div class="account-form-actions">
             <button type="button" class="secondary-button cancel-user-edit" hidden>取消编辑</button>
             <button type="submit" class="primary-button" id="saveUser">保存账号</button>
@@ -873,7 +876,7 @@ function renderSettings() {
         <table class="data-table">
           <thead><tr><th>员工</th><th>手机号</th><th>角色</th><th>权限摘要</th><th></th></tr></thead>
           <tbody>${users.map(user => `<tr>
-            <td><div class="student-cell" style="--student-color:#ff9f1c"><span class="avatar">${escapeHtml(user.name[0] || "员")}</span><div><strong>${escapeHtml(user.name)}</strong><small>ID ${user.id}</small></div></div></td>
+            <td><div class="student-cell" style="--student-color:${escapeHtml(user.avatarColor || "#ff9f1c")}"><span class="avatar">${escapeHtml(user.avatarText || user.name[0] || "员")}</span><div><strong>${escapeHtml(user.name)}</strong><small>ID ${user.id}</small></div></div></td>
             <td>${escapeHtml(user.phone)}</td>
             <td><span class="tag" style="--tag-color:#715b87">${escapeHtml(user.roleLabel)}</span></td>
             <td><small style="color:var(--muted)">${permissionSummary(user.role)}</small></td>
@@ -883,6 +886,49 @@ function renderSettings() {
             </div></td>
           </tr>`).join("")}</tbody>
         </table>
+      </section>
+    </div>`;
+}
+
+function renderAccount() {
+  pageContent.innerHTML = `
+    <div class="account-settings-grid">
+      <section class="panel account-profile-card">
+        <div class="panel-header">
+          <div class="panel-title"><h2>个人资料</h2><p>修改自己的登录手机号、显示名称和头像样式</p></div>
+        </div>
+        <form id="profileForm" class="account-form">
+          <div class="profile-preview">
+            <span class="avatar avatar-manager large-avatar" style="--profile-color:${escapeHtml(currentUser.avatarColor || "#ff9f1c")}">${escapeHtml(currentUser.avatarText || currentUser.name[0] || "员")}</span>
+            <div><strong>${escapeHtml(currentUser.name)}</strong><small>${escapeHtml(currentUser.roleLabel)} · ${escapeHtml(currentUser.phone)}</small></div>
+          </div>
+          <label><span>显示姓名</span><input name="name" required value="${escapeHtml(currentUser.name)}" /></label>
+          <label><span>登录手机号</span><input name="phone" required value="${escapeHtml(currentUser.phone)}" /></label>
+          <label><span>头像文字</span><input name="avatar_text" maxlength="2" value="${escapeHtml(currentUser.avatarText || currentUser.name[0] || "员")}" placeholder="1-2 个字" /></label>
+          <label class="color-field"><span>头像颜色</span><input name="avatar_color" type="color" value="${escapeHtml(currentUser.avatarColor || "#ff9f1c")}" /></label>
+          <div class="account-form-actions"><button type="submit" class="primary-button" id="saveProfile">保存个人资料</button></div>
+        </form>
+      </section>
+      <section class="panel account-profile-card">
+        <div class="panel-header">
+          <div class="panel-title"><h2>修改密码</h2><p>建议首次登录后立即把初始密码 000000 改成自己的密码</p></div>
+        </div>
+        <form id="passwordForm" class="account-form">
+          <label><span>当前密码</span><input name="current_password" type="password" autocomplete="current-password" required /></label>
+          <label><span>新密码</span><input name="new_password" type="password" autocomplete="new-password" minlength="6" required placeholder="至少 6 位" /></label>
+          <label><span>确认新密码</span><input name="confirm_password" type="password" autocomplete="new-password" minlength="6" required /></label>
+          <div class="account-form-actions"><button type="submit" class="primary-button" id="savePassword">更新密码</button></div>
+        </form>
+      </section>
+      <section class="panel account-tips-card">
+        <div class="panel-header">
+          <div class="panel-title"><h2>实用提醒</h2><p>这些小功能能减少日常使用时的麻烦</p></div>
+        </div>
+        <div class="account-tips">
+          <div><strong>手机号就是登录账号</strong><span>如果更换手机号，下次登录请使用新手机号。</span></div>
+          <div><strong>头像会同步到左下角</strong><span>可以用姓名首字、岗位简称或昵称，方便多人共用设备时识别。</span></div>
+          <div><strong>忘记密码</strong><span>请让校长在“系统设置”里编辑员工账号并重置密码，或先临时创建新账号。</span></div>
+        </div>
       </section>
     </div>`;
 }
@@ -927,6 +973,9 @@ async function renderPage(page, query = "") {
     if (page === "settings") {
       await loadUsers();
       renderSettings();
+    }
+    if (page === "account") {
+      renderAccount();
     }
     if (page === "schedule") {
       await Promise.all([loadCatalog(), loadStudents()]);
@@ -1142,6 +1191,9 @@ function closeRoster() {
 document.addEventListener("click", async event => {
   const nav = event.target.closest(".nav-item");
   if (nav && canOpenPage(nav.dataset.page)) renderPage(nav.dataset.page);
+
+  const profile = event.target.closest(".profile");
+  if (profile && !event.target.closest("#logoutButton") && canOpenPage("account")) renderPage("account");
 
   const go = event.target.closest("[data-go]");
   if (go) renderPage(go.dataset.go);
@@ -1375,6 +1427,52 @@ document.querySelector("#managementForm").addEventListener("submit", async event
 document.querySelector("#leadForm").addEventListener("submit", saveLead);
 
 document.addEventListener("submit", async event => {
+  if (event.target.id === "profileForm") {
+    event.preventDefault();
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    const button = document.querySelector("#saveProfile");
+    button.classList.add("button-loading");
+    button.textContent = "保存中...";
+    try {
+      const result = await api("/api/me/profile", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+      currentUser = result.user;
+      applyRoleUi();
+      showToast("个人资料已更新");
+      renderAccount();
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.classList.remove("button-loading");
+      button.textContent = "保存个人资料";
+    }
+    return;
+  }
+  if (event.target.id === "passwordForm") {
+    event.preventDefault();
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    const button = document.querySelector("#savePassword");
+    button.classList.add("button-loading");
+    button.textContent = "更新中...";
+    try {
+      await api("/api/me/password", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+      form.reset();
+      showToast("密码已更新，请牢记新密码");
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.classList.remove("button-loading");
+      button.textContent = "更新密码";
+    }
+    return;
+  }
   if (event.target.id === "hoursForm") {
     event.preventDefault();
     if (!can("hours:write")) {
@@ -1538,7 +1636,6 @@ function fillUserForm(userId) {
   form.elements.phone.value = user.phone;
   form.elements.name.value = user.name;
   form.elements.role.value = user.role;
-  form.elements.password.value = "";
   document.querySelector("#userFormTitle").textContent = "编辑员工账号";
   document.querySelector(".cancel-user-edit").hidden = false;
   document.querySelector("#saveUser").textContent = "保存修改";

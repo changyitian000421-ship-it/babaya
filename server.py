@@ -36,6 +36,7 @@ STATUSES = {"在读", "待续费", "请假中", "待分班", "停课"}
 COLORS = ["#ff9f1c", "#ffd33d", "#f47a12", "#715b87", "#4f896f"]
 SESSION_COOKIE = "sd_session"
 SESSION_HOURS = 12
+DEFAULT_INITIAL_PASSWORD = "000000"
 
 ROLE_LABELS = {
     "owner": "校长 / 管理员",
@@ -364,6 +365,8 @@ def user_to_dict(row: sqlite3.Row) -> dict:
         "username": row["username"],
         "phone": row["phone"],
         "name": row["name"],
+        "avatarText": row["avatar_text"] if "avatar_text" in row.keys() else (row["name"][:1] or "员"),
+        "avatarColor": row["avatar_color"] if "avatar_color" in row.keys() else "#ff9f1c",
         "role": row["role"],
         "roleLabel": ROLE_LABELS.get(row["role"], row["role"]),
         "permissions": permissions,
@@ -374,12 +377,18 @@ def ensure_user_schema(db: sqlite3.Connection) -> None:
     columns = table_columns(db, "users")
     if "phone" not in columns:
         db.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+    if "avatar_text" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN avatar_text TEXT NOT NULL DEFAULT ''")
+    if "avatar_color" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN avatar_color TEXT NOT NULL DEFAULT '#ff9f1c'")
     for username, phone, _password, _name, _role in SEED_USERS:
         db.execute(
             "UPDATE users SET phone = ? WHERE username = ? AND phone = ''",
             (phone, username),
         )
     db.execute("UPDATE users SET phone = username WHERE phone = ''")
+    db.execute("UPDATE users SET avatar_text = substr(name, 1, 1) WHERE avatar_text = ''")
+    db.execute("UPDATE users SET avatar_color = '#ff9f1c' WHERE avatar_color = ''")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
 
 
@@ -441,11 +450,40 @@ def validate_user(payload: dict, existing: sqlite3.Row | None = None) -> dict:
         raise ValueError("请填写员工姓名")
     if role not in ROLE_LABELS:
         raise ValueError("请选择有效角色")
-    if not existing and len(password) < 6:
-        raise ValueError("初始密码至少 6 位")
     if existing and password and len(password) < 6:
         raise ValueError("新密码至少 6 位")
+    if not existing:
+        password = DEFAULT_INITIAL_PASSWORD
     return {"phone": phone, "name": name, "role": role, "password": password}
+
+
+def validate_profile(payload: dict) -> dict:
+    phone = str(payload.get("phone", "")).strip()
+    name = str(payload.get("name", "")).strip()
+    avatar_text = str(payload.get("avatar_text", "")).strip()[:2]
+    avatar_color = str(payload.get("avatar_color", "#ff9f1c")).strip() or "#ff9f1c"
+    if not phone or len(phone) < 7:
+        raise ValueError("请填写有效手机号")
+    if not name:
+        raise ValueError("请填写姓名")
+    if not avatar_text:
+        avatar_text = name[:1] or "员"
+    if not re.match(r"^#[0-9a-fA-F]{6}$", avatar_color):
+        raise ValueError("头像颜色格式无效")
+    return {"phone": phone, "name": name, "avatar_text": avatar_text, "avatar_color": avatar_color}
+
+
+def validate_password_change(payload: dict) -> dict:
+    current_password = str(payload.get("current_password", ""))
+    new_password = str(payload.get("new_password", ""))
+    confirm_password = str(payload.get("confirm_password", ""))
+    if not current_password:
+        raise ValueError("请输入当前密码")
+    if len(new_password) < 6:
+        raise ValueError("新密码至少 6 位")
+    if new_password != confirm_password:
+        raise ValueError("两次输入的新密码不一致")
+    return {"current_password": current_password, "new_password": new_password}
 
 
 def initialize_database() -> None:
@@ -538,6 +576,8 @@ def initialize_database() -> None:
                 phone TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 name TEXT NOT NULL,
+                avatar_text TEXT NOT NULL DEFAULT '',
+                avatar_color TEXT NOT NULL DEFAULT '#ff9f1c',
                 role TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -662,12 +702,12 @@ def initialize_database() -> None:
         if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             db.executemany(
                 """
-                INSERT INTO users (username, phone, password_hash, name, role, active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                INSERT INTO users (username, phone, password_hash, name, avatar_text, avatar_color, role, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 [
-                    (username, phone, hash_password(password), name, role, now, now)
-                    for username, phone, password, name, role in SEED_USERS
+                    (username, phone, hash_password(password), name, name[:1], COLORS[index % len(COLORS)], role, now, now)
+                    for index, (username, phone, password, name, role) in enumerate(SEED_USERS)
                 ],
             )
         if db.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 0:
@@ -1113,6 +1153,52 @@ class AppHandler(BaseHTTPRequestHandler):
             extra_headers={"Set-Cookie": self.set_session_cookie("", 0)},
         )
 
+    def update_own_profile(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        try:
+            data = validate_profile(self.read_json())
+            data.update({"id": user["id"], "username": data["phone"], "updated_at": datetime.now().isoformat(timespec="seconds")})
+            with connect() as db:
+                db.execute(
+                    """
+                    UPDATE users SET username=:username, phone=:phone, name=:name,
+                        avatar_text=:avatar_text, avatar_color=:avatar_color, updated_at=:updated_at
+                    WHERE id=:id AND active = 1
+                    """,
+                    data,
+                )
+                row = db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "该手机号已被其他账号使用")
+            return
+        self.send_json({"user": user_to_dict(row)})
+
+    def update_own_password(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        try:
+            data = validate_password_change(self.read_json())
+            with connect() as db:
+                row = db.execute("SELECT * FROM users WHERE id = ? AND active = 1", (user["id"],)).fetchone()
+                if not row or not verify_password(data["current_password"], row["password_hash"]):
+                    raise ValueError("当前密码不正确")
+                db.execute(
+                    "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                    (hash_password(data["new_password"]), datetime.now().isoformat(timespec="seconds"), user["id"]),
+                )
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"changed": True})
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
@@ -1248,6 +1334,12 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/me/profile":
+            self.update_own_profile()
+            return
+        if path == "/api/me/password":
+            self.update_own_password()
+            return
         parts = path.strip("/").split("/")
         if len(parts) != 3 or parts[0] != "api":
             self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
@@ -1553,14 +1645,16 @@ class AppHandler(BaseHTTPRequestHandler):
             with connect() as db:
                 cursor = db.execute(
                     """
-                    INSERT INTO users (username, phone, password_hash, name, role, active, created_at, updated_at)
-                    VALUES (:username, :phone, :password_hash, :name, :role, 1, :created_at, :updated_at)
+                    INSERT INTO users (username, phone, password_hash, name, avatar_text, avatar_color, role, active, created_at, updated_at)
+                    VALUES (:username, :phone, :password_hash, :name, :avatar_text, :avatar_color, :role, 1, :created_at, :updated_at)
                     """,
                     {
                         "username": data["phone"],
                         "phone": data["phone"],
                         "password_hash": hash_password(data["password"]),
                         "name": data["name"],
+                        "avatar_text": data["name"][:1] or "员",
+                        "avatar_color": COLORS[0],
                         "role": data["role"],
                         "created_at": now,
                         "updated_at": now,

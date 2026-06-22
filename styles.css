@@ -146,11 +146,11 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .goal-line b { color: var(--accent); }
 .progress { height: 6px; overflow: hidden; border-radius: 8px; background: #f4d896; }
 .progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
-.profile { display: flex; align-items: center; gap: 10px; padding: 14px 8px 0; border-top: 1px solid var(--line); }
+.profile { display: flex; align-items: center; gap: 10px; padding: 14px 8px 0; border-top: 1px solid var(--line); cursor: pointer; }
 .profile strong { font-size: 13px; }
 .profile button { margin-left: auto; padding: 4px; border: 0; color: var(--muted); background: none; cursor: pointer; }
 .avatar { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; font-weight: 700; }
-.avatar-manager { color: #2f2518; background: linear-gradient(145deg, #ffe16b, #ff9f1c); }
+.avatar-manager { color: #2f2518; background: linear-gradient(145deg, color-mix(in srgb, var(--profile-color, #ff9f1c) 55%, white), var(--profile-color, #ff9f1c)); }
 
 .main { width: calc(100% - 246px); min-height: 100vh; margin-left: 246px; }
 .topbar {
@@ -393,6 +393,17 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
 .account-form-actions { display: flex; justify-content: flex-end; gap: 9px; padding-top: 4px; }
 .account-table-card { overflow-x: auto; }
 .table-action:disabled { opacity: .35; cursor: not-allowed; }
+.account-default-password { padding: 12px; border: 1px dashed #e8d5bf; border-radius: 12px; background: #fff9ed; }
+.account-default-password strong { display: block; margin-bottom: 4px; font-size: 12px; }.account-default-password span { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.account-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.account-profile-card { overflow: hidden; }
+.profile-preview { display: flex; align-items: center; gap: 13px; padding: 0 22px 4px; }
+.large-avatar { width: 54px; height: 54px; font-size: 18px; }
+.profile-preview strong { display: block; font-size: 15px; }.profile-preview small { color: var(--muted); font-size: 10px; }
+.account-tips-card { grid-column: 1 / -1; }
+.account-tips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0 22px 22px; }
+.account-tips div { padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: #fffefa; }
+.account-tips strong { display: block; margin-bottom: 6px; font-size: 12px; }.account-tips span { color: var(--muted); font-size: 10px; line-height: 1.6; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgba(43, 37, 33, .46); backdrop-filter: blur(5px); }
 .modal-backdrop[hidden] { display: none; }
@@ -445,6 +456,8 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
   .course-facts { grid-template-columns: 1fr 1fr; }
   .resource-info { grid-template-columns: 1fr; }
   .settings-grid, .settings-layout { grid-template-columns: 1fr; }
+  .account-settings-grid, .account-tips { grid-template-columns: 1fr; }
+  .account-tips-card { grid-column: auto; }
 }
 @media (max-width: 480px) {
   .metric-grid { grid-template-columns: 1fr; }
