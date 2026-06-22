@@ -53,11 +53,11 @@ ROLE_PERMISSIONS = {
     },
     "academic": {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
-        "roster:write", "hours:read", "hours:write", "teaching:read",
+        "roster:write", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read",
     },
-    "teacher": {"dashboard:read", "students:read", "catalog:read", "hours:read", "hours:write", "teaching:read"},
+    "teacher": {"dashboard:read", "students:read", "catalog:read", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read"},
     "sales": {"dashboard:read", "students:read", "students:write", "leads:read", "leads:write"},
-    "finance": {"dashboard:read", "students:read", "hours:read", "hours:write"},
+    "finance": {"dashboard:read", "students:read", "leads:read", "leads:write", "hours:read", "hours:write"},
 }
 
 SEED_USERS = [

@@ -36,10 +36,10 @@ const pageMeta = {
 
 const rolePages = {
   owner: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching", "settings"],
-  academic: ["dashboard", "students", "catalog", "schedule", "hours", "teaching"],
-  teacher: ["dashboard", "schedule", "hours", "teaching", "students", "catalog"],
+  academic: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching"],
+  teacher: ["dashboard", "schedule", "hours", "leads", "teaching", "students", "catalog"],
   sales: ["dashboard", "leads", "students"],
-  finance: ["dashboard", "hours", "students"],
+  finance: ["dashboard", "hours", "leads", "students"],
 };
 
 const roleOptions = [
