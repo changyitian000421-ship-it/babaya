@@ -26,7 +26,9 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(ROOT / "data"))).expanduser()
 DATABASE = Path(os.environ.get("DATABASE_PATH", str(DATA_DIR / "shengdong.db"))).expanduser()
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
-DATABASE_KIND = "postgres" if DATABASE_URL else "sqlite"
+TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL", "").strip()
+TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+DATABASE_KIND = "turso" if TURSO_DATABASE_URL else "postgres" if DATABASE_URL else "sqlite"
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "4173"))
 
@@ -173,6 +175,81 @@ class PostgresConnection:
             self.execute(statement)
 
 
+class LibsqlCursor:
+    def __init__(self, result):
+        self.result = result
+        self.lastrowid = getattr(result, "last_insert_rowid", None)
+        self._rows = list(getattr(result, "rows", []) or [])
+        self._columns = list(getattr(result, "columns", []) or [])
+
+    @property
+    def rowcount(self) -> int:
+        return getattr(self.result, "rows_affected", -1)
+
+    def row_to_dict(self, row):
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return DictRow(row)
+        if hasattr(row, "keys"):
+            return DictRow({key: row[key] for key in row.keys()})
+        return DictRow(dict(zip(self._columns, row)))
+
+    def fetchone(self):
+        return self.row_to_dict(self._rows[0]) if self._rows else None
+
+    def fetchall(self) -> list[DictRow]:
+        return [self.row_to_dict(row) for row in self._rows]
+
+
+class LibsqlConnection:
+    dialect = "turso"
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        if hasattr(self.connection, "__enter__"):
+            self.connection.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if exc_type:
+            if hasattr(self.connection, "rollback"):
+                self.connection.rollback()
+        elif hasattr(self.connection, "commit"):
+            self.connection.commit()
+        if hasattr(self.connection, "__exit__"):
+            return self.connection.__exit__(exc_type, exc, traceback)
+        if hasattr(self.connection, "close"):
+            self.connection.close()
+        return None
+
+    def execute(self, sql: str, params: tuple | dict = ()):
+        try:
+            result = self.connection.execute(sql, params)
+            return LibsqlCursor(result)
+        except Exception as exc:
+            if exc.__class__.__name__ in {"IntegrityError", "LibsqlError"}:
+                raise sqlite3.IntegrityError(str(exc)) from exc
+            raise
+
+    def executemany(self, sql: str, params: list[tuple] | list[dict]):
+        try:
+            result = None
+            for item in params:
+                result = self.connection.execute(sql, item)
+            return LibsqlCursor(result)
+        except Exception as exc:
+            if exc.__class__.__name__ in {"IntegrityError", "LibsqlError"}:
+                raise sqlite3.IntegrityError(str(exc)) from exc
+            raise
+
+    def executescript(self, script: str) -> None:
+        for statement in split_sql_script(script):
+            self.execute(statement)
+
+
 def split_sql_script(script: str) -> list[str]:
     return [statement.strip() for statement in script.split(";") if statement.strip()]
 
@@ -200,6 +277,19 @@ def postgres_schema(script: str) -> str:
 
 
 def connect():
+    if DATABASE_KIND == "turso":
+        if not TURSO_AUTH_TOKEN:
+            raise RuntimeError("使用 Turso 需要设置 TURSO_AUTH_TOKEN")
+        try:
+            import libsql_client
+        except ImportError as exc:
+            raise RuntimeError("使用 Turso 需要安装 libsql-client，请运行 pip install -r requirements.txt") from exc
+        connection = libsql_client.create_client_sync(
+            TURSO_DATABASE_URL,
+            auth_token=TURSO_AUTH_TOKEN,
+        )
+        return LibsqlConnection(connection)
+
     if DATABASE_KIND == "postgres":
         try:
             import psycopg
@@ -295,7 +385,8 @@ def validate_user(payload: dict, existing: sqlite3.Row | None = None) -> dict:
 
 
 def initialize_database() -> None:
-    DATABASE.parent.mkdir(parents=True, exist_ok=True)
+    if DATABASE_KIND == "sqlite":
+        DATABASE.parent.mkdir(parents=True, exist_ok=True)
     with connect() as db:
         schema_sql = """
             CREATE TABLE IF NOT EXISTS students (
@@ -1536,7 +1627,13 @@ def run() -> None:
     initialize_database()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     print(f"声动教培系统已启动：http://{HOST}:{PORT}")
-    print(f"数据库：{'PostgreSQL' if DATABASE_KIND == 'postgres' else DATABASE}")
+    if DATABASE_KIND == "turso":
+        database_label = f"Turso ({TURSO_DATABASE_URL})"
+    elif DATABASE_KIND == "postgres":
+        database_label = "PostgreSQL"
+    else:
+        database_label = str(DATABASE)
+    print(f"数据库：{database_label}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

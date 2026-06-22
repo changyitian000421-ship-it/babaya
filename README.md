@@ -92,10 +92,11 @@ Render 可以直接读取本项目的 `render.yaml`：
 
 ## 接入 PostgreSQL
 
-系统现在支持双数据库模式：
+系统现在支持三种数据库模式：
 
 - 未配置 `DATABASE_URL`：默认使用本地 SQLite，适合开发和本机试用
 - 已配置 `DATABASE_URL`：自动使用 PostgreSQL，适合 Render 正式部署
+- 已配置 `TURSO_DATABASE_URL`：自动使用 Turso / libSQL，适合免费云端试用
 
 在 Render 中接入 PostgreSQL：
 
@@ -118,6 +119,29 @@ DATABASE_URL=postgresql://...
 export DATABASE_URL="postgresql://用户名:密码@localhost:5432/shengdong"
 python3 server.py
 ```
+
+## 接入 Turso
+
+Turso 是云端 SQLite / libSQL，迁移成本比 PostgreSQL 更低。Render 上推荐用 Turso 免费方案试运行：
+
+1. 注册 Turso 并创建数据库。
+2. 复制数据库地址，通常形如：
+
+```text
+libsql://你的数据库.turso.io
+```
+
+3. 创建数据库访问 token。
+4. 打开 Render Web Service，进入 `Environment`，添加：
+
+```text
+TURSO_DATABASE_URL=libsql://你的数据库.turso.io
+TURSO_AUTH_TOKEN=你的 token
+```
+
+5. 重新部署 Web Service。
+
+系统会优先使用 Turso；如果没有 Turso 环境变量，再使用 PostgreSQL；都没有时使用本地 SQLite。启动后访问 `/api/health`，返回的 `database` 字段会显示当前数据库类型。
 
 ## 当前数据接口
 
