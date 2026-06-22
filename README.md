@@ -141,7 +141,7 @@ TURSO_AUTH_TOKEN=你的 token
 
 5. 重新部署 Web Service。
 
-系统会优先使用 Turso；如果没有 Turso 环境变量，再使用 PostgreSQL；都没有时使用本地 SQLite。启动后访问 `/api/health`，返回的 `database` 字段会显示当前数据库类型。
+系统会优先使用 Turso；如果没有 Turso 环境变量，再使用 PostgreSQL；都没有时使用本地 SQLite。你可以直接填写 Turso 提供的 `libsql://` 地址，服务会自动使用 HTTP 连接。启动后访问 `/api/health`，返回的 `database` 字段会显示当前数据库类型。
 
 ## 当前数据接口
 

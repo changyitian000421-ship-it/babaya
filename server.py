@@ -276,6 +276,16 @@ def postgres_schema(script: str) -> str:
     )
 
 
+def turso_client_url() -> str:
+    if TURSO_DATABASE_URL.startswith("libsql://"):
+        return TURSO_DATABASE_URL.replace("libsql://", "https://", 1)
+    if TURSO_DATABASE_URL.startswith("wss://"):
+        return TURSO_DATABASE_URL.replace("wss://", "https://", 1)
+    if TURSO_DATABASE_URL.startswith("ws://"):
+        return TURSO_DATABASE_URL.replace("ws://", "http://", 1)
+    return TURSO_DATABASE_URL
+
+
 def connect():
     if DATABASE_KIND == "turso":
         if not TURSO_AUTH_TOKEN:
@@ -285,7 +295,7 @@ def connect():
         except ImportError as exc:
             raise RuntimeError("使用 Turso 需要安装 libsql-client，请运行 pip install -r requirements.txt") from exc
         connection = libsql_client.create_client_sync(
-            TURSO_DATABASE_URL,
+            turso_client_url(),
             auth_token=TURSO_AUTH_TOKEN,
         )
         return LibsqlConnection(connection)
