@@ -714,7 +714,7 @@ function renderHours() {
     .filter(item => item.action === "consume" && String(item.occurred_at || item.created_at).startsWith(monthKey))
     .reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const canManageHours = can("hours:write");
-  const optionsHtml = hourTeacherStudentOptions(groups);
+  const optionsHtml = hourTeacherStudentOptions(groups, canSeeOverall);
   pageContent.innerHTML = `
     <div class="hours-summary">
       <div class="summary-card"><span>本月已消课</span><strong>${formatHours(consumedThisMonth)}</strong><span>来自课时流水</span></div>
@@ -726,7 +726,7 @@ function renderHours() {
     ${canManageHours ? `<section class="panel hours-form-panel">
       <div class="panel-header"><div class="panel-title"><h2>新增课时变动</h2><p>购买、消课、返还和手动扣减都会生成可追溯流水</p></div></div>
       <form id="hoursForm" class="hours-form">
-        <label><span>教师 / 学员</span><select name="teacher_student" required ${optionsHtml ? "" : "disabled"}>${optionsHtml || `<option>暂无可记录的教师学员</option>`}</select></label>
+        ${canSeeOverall ? `<label><span>教师 / 学员</span><select name="teacher_student" required ${optionsHtml ? "" : "disabled"}>${optionsHtml || `<option>暂无可记录的教师学员</option>`}</select></label>` : `<label><span>学员</span><select name="teacher_student" required ${optionsHtml ? "" : "disabled"}>${optionsHtml || `<option>暂无可记录的学员</option>`}</select></label>`}
         <label><span>变动类型</span><select name="action"><option value="purchase">购买课时</option><option value="consume">上课消课</option><option value="return">请假返还</option><option value="deduct">手动扣减</option></select></label>
         <label><span>课时数</span><input name="amount" required type="number" min="0.5" step="0.5" value="1" /></label>
         <label><span>发生时间</span><input name="occurred_at" type="datetime-local" value="${defaultDateTimeLocal()}" /></label>
@@ -823,9 +823,14 @@ function teacherHourCard(group) {
   </article>`;
 }
 
-function hourTeacherStudentOptions(groups) {
-  return groups
-    .filter(group => group.students.length)
+function hourTeacherStudentOptions(groups, includeTeacher) {
+  const availableGroups = groups.filter(group => group.students.length);
+  if (!includeTeacher) {
+    return availableGroups
+      .flatMap(group => group.students.map(student => `<option value="${group.teacher.id}:${student.id}">${escapeHtml(student.name)} · ${escapeHtml(student.course)} · 剩余 ${formatHours(student.hours)} 课时</option>`))
+      .join("");
+  }
+  return availableGroups
     .map(group => `<optgroup label="${escapeHtml(group.teacher.display_name)}">${group.students.map(student => `<option value="${group.teacher.id}:${student.id}">${escapeHtml(group.teacher.display_name)} · ${escapeHtml(student.name)} · 剩余 ${formatHours(student.hours)} 课时</option>`).join("")}</optgroup>`)
     .join("");
 }
@@ -1378,9 +1383,14 @@ document.addEventListener("submit", async event => {
     }
     const form = event.target;
     const data = Object.fromEntries(new FormData(form));
-    const [teacherId, studentId] = String(data.teacher_student || "").split(":").map(Number);
-    data.teacher_id = teacherId;
-    data.student_id = studentId;
+    if (data.teacher_student) {
+      const [teacherId, studentId] = String(data.teacher_student).split(":").map(Number);
+      data.teacher_id = teacherId;
+      data.student_id = studentId;
+    } else {
+      data.teacher_id = Number(data.teacher_id);
+      data.student_id = Number(data.student_id);
+    }
     delete data.teacher_student;
     data.amount = Number(data.amount);
     const button = document.querySelector("#saveHours");

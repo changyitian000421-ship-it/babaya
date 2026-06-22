@@ -55,7 +55,7 @@ ROLE_PERMISSIONS = {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
         "roster:write", "hours:read", "hours:write", "teaching:read",
     },
-    "teacher": {"dashboard:read", "students:read", "catalog:read", "hours:read", "teaching:read"},
+    "teacher": {"dashboard:read", "students:read", "catalog:read", "hours:read", "hours:write", "teaching:read"},
     "sales": {"dashboard:read", "students:read", "students:write", "leads:read", "leads:write"},
     "finance": {"dashboard:read", "students:read", "hours:read", "hours:write"},
 }
@@ -924,6 +924,21 @@ def teacher_ids_for_user(db: sqlite3.Connection, user: sqlite3.Row | dict | None
     return [row["id"] for row in rows]
 
 
+def student_belongs_to_teacher(db: sqlite3.Connection, teacher_id: int, student_id: int) -> bool:
+    return bool(
+        db.execute(
+            """
+            SELECT 1
+            FROM class_students cs
+            JOIN classes c ON c.id = cs.class_id
+            WHERE c.teacher_id = ? AND cs.student_id = ?
+            LIMIT 1
+            """,
+            (teacher_id, student_id),
+        ).fetchone()
+    )
+
+
 def validate_student(payload: dict, partial: bool = False) -> dict:
     required = ("name", "age", "parent", "phone", "course")
     if not partial:
@@ -1484,6 +1499,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 student = db.execute("SELECT * FROM students WHERE id = ?", (data["student_id"],)).fetchone()
                 if not student:
                     raise ValueError("学员不存在")
+                if not student_belongs_to_teacher(db, data["teacher_id"], data["student_id"]):
+                    raise ValueError("该学员不在该教师名下，不能记录课时变动")
                 balance_after = float(student["hours"]) + delta
                 if balance_after < 0:
                     raise ValueError(f"{student['name']} 当前仅剩 {format_number(student['hours'])} 课时，不能{label} {format_number(data['amount'])} 课时")
