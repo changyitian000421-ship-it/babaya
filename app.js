@@ -36,8 +36,8 @@ const pageMeta = {
 
 const rolePages = {
   owner: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching", "settings"],
-  academic: ["dashboard", "students", "catalog", "schedule", "teaching"],
-  teacher: ["dashboard", "schedule", "teaching", "students", "catalog"],
+  academic: ["dashboard", "students", "catalog", "schedule", "hours", "teaching"],
+  teacher: ["dashboard", "schedule", "hours", "teaching", "students", "catalog"],
   sales: ["dashboard", "leads", "students"],
   finance: ["dashboard", "hours", "students"],
 };
@@ -705,6 +705,8 @@ async function updateLeadStage(leadId, stage) {
 }
 
 function renderHours() {
+  const groups = visibleHourGroups();
+  const canSeeOverall = canSeeOverallHours();
   const totalHours = students.reduce((sum, student) => sum + Number(student.hours || 0), 0);
   const renewalStudents = students.filter(student => Number(student.hours || 0) <= 4 && student.status !== "停课");
   const monthKey = toDateInputValue(new Date()).slice(0, 7);
@@ -712,38 +714,120 @@ function renderHours() {
     .filter(item => item.action === "consume" && String(item.occurred_at || item.created_at).startsWith(monthKey))
     .reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const canManageHours = can("hours:write");
+  const optionsHtml = hourTeacherStudentOptions(groups);
   pageContent.innerHTML = `
     <div class="hours-summary">
       <div class="summary-card"><span>本月已消课</span><strong>${formatHours(consumedThisMonth)}</strong><span>来自课时流水</span></div>
       <div class="summary-card"><span>剩余课时总量</span><strong>${formatHours(totalHours)}</strong><span>覆盖 ${students.length} 名学员</span></div>
       <div class="summary-card"><span>低课时待跟进</span><strong>${renewalStudents.length} 人</strong><span class="${renewalStudents.length ? "negative" : "positive"}">4 课时及以下</span></div>
     </div>
+    <div class="section-toolbar"><div><h2>${canSeeOverall ? "教师课时总览" : "我的课时学员"}</h2><p>${canSeeOverall ? "按教师查看名下学员与剩余课时，校长也作为授课教师单独统计" : "当前教师账号只显示自己名下的学员与流水"}</p></div></div>
+    <div class="teacher-hours-grid">${groups.length ? groups.map(teacherHourCard).join("") : `<div class="empty-state">当前账号还没有关联教师，请让校长在教师名单中添加同名教师。</div>`}</div>
     ${canManageHours ? `<section class="panel hours-form-panel">
       <div class="panel-header"><div class="panel-title"><h2>新增课时变动</h2><p>购买、消课、返还和手动扣减都会生成可追溯流水</p></div></div>
       <form id="hoursForm" class="hours-form">
-        <label><span>学员</span><select name="student_id" required>${students.map(student => `<option value="${student.id}">${escapeHtml(student.name)} · 剩余 ${formatHours(student.hours)} 课时</option>`).join("")}</select></label>
+        <label><span>教师 / 学员</span><select name="teacher_student" required ${optionsHtml ? "" : "disabled"}>${optionsHtml || `<option>暂无可记录的教师学员</option>`}</select></label>
         <label><span>变动类型</span><select name="action"><option value="purchase">购买课时</option><option value="consume">上课消课</option><option value="return">请假返还</option><option value="deduct">手动扣减</option></select></label>
         <label><span>课时数</span><input name="amount" required type="number" min="0.5" step="0.5" value="1" /></label>
         <label><span>发生时间</span><input name="occurred_at" type="datetime-local" value="${defaultDateTimeLocal()}" /></label>
         <label class="full"><span>备注</span><input name="note" placeholder="例如：购买 24 课时 / 6月22日主持基础班消课" /></label>
-        <div class="hours-form-actions"><button type="submit" class="primary-button" id="saveHours">保存课时流水</button></div>
+        <div class="hours-form-actions"><button type="submit" class="primary-button" id="saveHours" ${optionsHtml ? "" : "disabled"}>保存课时流水</button></div>
       </form>
     </section>` : `<div class="roster-readonly">当前角色只能查看课时流水，不能新增课时变动。</div>`}
     <div class="section-toolbar"><div><h2>最近课时流水</h2><p>每笔课时变动均可追溯，最多显示最近 200 条</p></div></div>
-    <div class="table-card"><table class="data-table"><thead><tr><th>时间</th><th>学员</th><th>变动类型</th><th>课程</th><th>课时变动</th><th>操作人</th></tr></thead>
+    <div class="table-card"><table class="data-table"><thead><tr><th>时间</th><th>教师</th><th>学员</th><th>变动类型</th><th>课程</th><th>课时变动</th><th>操作人</th></tr></thead>
       <tbody>
         ${hourTransactions.length ? hourTransactions.map(item => {
           const delta = Number(item.delta || 0);
           return `<tr>
             <td>${formatShortTime(item.occurred_at || item.created_at)}</td>
+            <td>${escapeHtml(item.teacher_name || "未指定教师")}</td>
             <td><strong>${escapeHtml(item.student_name)}</strong><br><small>余额 ${formatHours(item.balance_after)} 课时</small></td>
             <td>${escapeHtml(item.action_label)}</td>
             <td>${escapeHtml(item.course_name || "未分配课程")}</td>
             <td><strong class="${delta >= 0 ? "positive" : "negative"}">${delta >= 0 ? "+" : ""}${formatHours(delta)}</strong></td>
             <td>${escapeHtml(item.operator_name || "系统")}<br><small>${escapeHtml(item.note || "无备注")}</small></td>
           </tr>`;
-        }).join("") : `<tr><td colspan="6"><div class="empty-state">还没有课时流水，先新增一笔购买或消课记录。</div></td></tr>`}
+        }).join("") : `<tr><td colspan="7"><div class="empty-state">还没有课时流水，先新增一笔购买或消课记录。</div></td></tr>`}
       </tbody></table></div>`;
+}
+
+function canSeeOverallHours() {
+  return ["owner", "academic", "finance"].includes(currentUser?.role);
+}
+
+function visibleHourGroups() {
+  const groups = teacherHoursGroups();
+  if (canSeeOverallHours()) return groups;
+  const normalizedName = String(currentUser?.name || "").trim();
+  const normalizedPhone = String(currentUser?.phone || "").trim();
+  return groups.filter(group => {
+    const teacher = group.teacher;
+    return [teacher.name, teacher.display_name, teacher.phone].some(value => String(value || "").trim() === normalizedName)
+      || String(teacher.phone || "").trim() === normalizedPhone;
+  });
+}
+
+function teacherHoursGroups() {
+  const studentById = new Map(students.map(student => [student.id, student]));
+  const orderedTeachers = [...catalog.teachers].sort((a, b) => {
+    const aOwner = String(a.display_name || a.name || "").includes("校长") ? 0 : 1;
+    const bOwner = String(b.display_name || b.name || "").includes("校长") ? 0 : 1;
+    return aOwner - bOwner || a.id - b.id;
+  });
+  const groups = orderedTeachers.map(teacher => ({
+    teacher,
+    students: [],
+    studentIds: new Set(),
+  }));
+  const groupByTeacherId = new Map(groups.map(group => [group.teacher.id, group]));
+  for (const classItem of catalog.classes) {
+    const group = groupByTeacherId.get(classItem.teacher_id);
+    if (!group) continue;
+    for (const rosterStudent of classItem.students || []) {
+      const student = studentById.get(rosterStudent.id) || rosterStudent;
+      if (group.studentIds.has(student.id)) continue;
+      group.studentIds.add(student.id);
+      group.students.push(student);
+    }
+  }
+  return groups.map(group => {
+    const transactions = hourTransactions.filter(item => Number(item.teacher_id) === Number(group.teacher.id));
+    return {
+      ...group,
+      students: group.students.sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
+      totalHours: group.students.reduce((sum, student) => sum + Number(student.hours || 0), 0),
+      lowCount: group.students.filter(student => Number(student.hours || 0) <= 4 && student.status !== "停课").length,
+      consumedHours: transactions.filter(item => item.action === "consume").reduce((sum, item) => sum + Number(item.amount || 0), 0),
+    };
+  });
+}
+
+function teacherHourCard(group) {
+  return `<article class="teacher-hours-card" style="--teacher-color:${escapeHtml(group.teacher.color || "#ff9f1c")}">
+    <div class="teacher-hours-head">
+      <span class="avatar">${escapeHtml((group.teacher.display_name || group.teacher.name || "师")[0])}</span>
+      <div><h3>${escapeHtml(group.teacher.display_name)}</h3><p>${escapeHtml(group.teacher.specialty || "授课教师")}</p></div>
+    </div>
+    <div class="teacher-hours-stats">
+      <span>学员<strong>${group.students.length} 人</strong></span>
+      <span>剩余课时<strong>${formatHours(group.totalHours)}</strong></span>
+      <span>低课时<strong class="${group.lowCount ? "negative" : "positive"}">${group.lowCount} 人</strong></span>
+    </div>
+    <div class="teacher-student-list">
+      ${group.students.length ? group.students.map(student => `<div class="teacher-student-row">
+        <strong>${escapeHtml(student.name)}</strong>
+        <span>${escapeHtml(student.course)} · ${formatHours(student.hours)} 课时</span>
+      </div>`).join("") : `<div class="lead-empty">暂无分配学员</div>`}
+    </div>
+  </article>`;
+}
+
+function hourTeacherStudentOptions(groups) {
+  return groups
+    .filter(group => group.students.length)
+    .map(group => `<optgroup label="${escapeHtml(group.teacher.display_name)}">${group.students.map(student => `<option value="${group.teacher.id}:${student.id}">${escapeHtml(group.teacher.display_name)} · ${escapeHtml(student.name)} · 剩余 ${formatHours(student.hours)} 课时</option>`).join("")}</optgroup>`)
+    .join("");
 }
 
 function defaultDateTimeLocal() {
@@ -848,7 +932,7 @@ async function renderPage(page, query = "") {
       renderLeads();
     }
     if (page === "hours") {
-      await Promise.all([loadStudents(), loadHourTransactions()]);
+      await Promise.all([loadStudents(), loadCatalog(), loadHourTransactions()]);
       renderHours();
     }
   } catch (error) {
@@ -1294,7 +1378,10 @@ document.addEventListener("submit", async event => {
     }
     const form = event.target;
     const data = Object.fromEntries(new FormData(form));
-    data.student_id = Number(data.student_id);
+    const [teacherId, studentId] = String(data.teacher_student || "").split(":").map(Number);
+    data.teacher_id = teacherId;
+    data.student_id = studentId;
+    delete data.teacher_student;
     data.amount = Number(data.amount);
     const button = document.querySelector("#saveHours");
     button.classList.add("button-loading");
@@ -1305,7 +1392,7 @@ document.addEventListener("submit", async event => {
         body: JSON.stringify(data),
       });
       showToast("课时流水已保存");
-      await Promise.all([loadStudents(), loadHourTransactions()]);
+      await Promise.all([loadStudents(), loadCatalog(), loadHourTransactions()]);
       renderHours();
     } catch (error) {
       showToast(error.message);

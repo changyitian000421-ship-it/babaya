@@ -53,9 +53,9 @@ ROLE_PERMISSIONS = {
     },
     "academic": {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
-        "roster:write", "teaching:read",
+        "roster:write", "hours:read", "hours:write", "teaching:read",
     },
-    "teacher": {"dashboard:read", "students:read", "catalog:read", "teaching:read"},
+    "teacher": {"dashboard:read", "students:read", "catalog:read", "hours:read", "teaching:read"},
     "sales": {"dashboard:read", "students:read", "students:write", "leads:read", "leads:write"},
     "finance": {"dashboard:read", "students:read", "hours:read", "hours:write"},
 }
@@ -84,6 +84,7 @@ SEED_COURSES = [
 ]
 
 SEED_TEACHERS = [
+    ("林知夏", "林校长", "主持、语言艺术综合课", "13800000001", "#f47a12"),
     ("陈语安", "陈老师", "主持、少儿口才", "13800001001", "#ff9f1c"),
     ("苏清禾", "苏老师", "朗诵、语音表达", "13800001002", "#715b87"),
     ("方明远", "方老师", "演讲、赛事辅导", "13800001003", "#4f896f"),
@@ -409,6 +410,26 @@ def ensure_class_schedule_schema(db: sqlite3.Connection) -> None:
     db.execute("UPDATE classes SET end_date = ? WHERE end_date = ''", (f"{current_year}-12-31",))
 
 
+def ensure_seed_teachers(db: sqlite3.Connection) -> None:
+    for name, display_name, specialty, phone, color in SEED_TEACHERS:
+        if db.execute("SELECT id FROM teachers WHERE display_name = ?", (display_name,)).fetchone():
+            continue
+        db.execute(
+            """
+            INSERT INTO teachers (name, display_name, specialty, phone, color, active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (name, display_name, specialty, phone, color),
+        )
+
+
+def ensure_hour_transaction_schema(db: sqlite3.Connection) -> None:
+    columns = table_columns(db, "hour_transactions")
+    if "teacher_id" not in columns:
+        db.execute("ALTER TABLE hour_transactions ADD COLUMN teacher_id INTEGER")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_hour_transactions_teacher ON hour_transactions(teacher_id)")
+
+
 def validate_user(payload: dict, existing: sqlite3.Row | None = None) -> dict:
     phone = str(payload.get("phone", "")).strip()
     name = str(payload.get("name", "")).strip()
@@ -554,6 +575,7 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS hour_transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
                 action TEXT NOT NULL,
                 amount REAL NOT NULL CHECK (amount > 0),
                 delta REAL NOT NULL,
@@ -570,6 +592,7 @@ def initialize_database() -> None:
         db.executescript(postgres_schema(schema_sql) if DATABASE_KIND == "postgres" else schema_sql)
         ensure_user_schema(db)
         ensure_class_schedule_schema(db)
+        ensure_hour_transaction_schema(db)
         now = datetime.now().isoformat(timespec="seconds")
         count = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
         if count == 0:
@@ -596,6 +619,7 @@ def initialize_database() -> None:
                 "INSERT INTO teachers (name, display_name, specialty, phone, color) VALUES (?, ?, ?, ?, ?)",
                 SEED_TEACHERS,
             )
+        ensure_seed_teachers(db)
         if db.execute("SELECT COUNT(*) FROM rooms").fetchone()[0] == 0:
             db.executemany(
                 "INSERT INTO rooms (name, code, capacity) VALUES (?, ?, ?)",
@@ -867,6 +891,7 @@ def validate_hour_transaction(payload: dict) -> dict:
         raise ValueError("课时变动类型无效")
     return {
         "student_id": integer_value(payload, "student_id", "学员", 1),
+        "teacher_id": integer_value(payload, "teacher_id", "教师", 1),
         "action": action,
         "amount": number_value(payload, "amount", "课时数", 0.5),
         "note": str(payload.get("note", "")).strip(),
@@ -882,6 +907,21 @@ def hour_transaction_to_dict(row: sqlite3.Row) -> dict:
             item[key] = int(item[key])
     item["action_label"] = HOUR_ACTIONS.get(item["action"], (item["action"], 0))[0]
     return item
+
+
+def teacher_ids_for_user(db: sqlite3.Connection, user: sqlite3.Row | dict | None) -> list[int] | None:
+    if not user or user["role"] in {"owner", "academic", "finance"}:
+        return None
+    if user["role"] != "teacher":
+        return []
+    rows = db.execute(
+        """
+        SELECT id FROM teachers
+        WHERE active = 1 AND (display_name = ? OR name = ? OR phone = ?)
+        """,
+        (user["name"], user["name"], user["phone"]),
+    ).fetchall()
+    return [row["id"] for row in rows]
 
 
 def validate_student(payload: dict, partial: bool = False) -> dict:
@@ -1401,15 +1441,29 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def get_hour_transactions(self) -> None:
         with connect() as db:
+            teacher_ids = teacher_ids_for_user(db, self.current_user())
+            where_sql = ""
+            params: tuple = ()
+            if teacher_ids == []:
+                self.send_json([])
+                return
+            if teacher_ids is not None:
+                placeholders = ", ".join("?" for _ in teacher_ids)
+                where_sql = f"WHERE h.teacher_id IN ({placeholders})"
+                params = tuple(teacher_ids)
             rows = db.execute(
-                """
-                SELECT h.*, s.name AS student_name, s.course AS course_name, u.name AS operator_name
+                f"""
+                SELECT h.*, s.name AS student_name, s.course AS course_name,
+                    t.display_name AS teacher_name, u.name AS operator_name
                 FROM hour_transactions h
                 JOIN students s ON s.id = h.student_id
+                LEFT JOIN teachers t ON t.id = h.teacher_id
                 LEFT JOIN users u ON u.id = h.operator_id
+                {where_sql}
                 ORDER BY h.occurred_at DESC, h.id DESC
                 LIMIT 200
-                """
+                """,
+                params,
             ).fetchall()
         self.send_json([hour_transaction_to_dict(row) for row in rows])
 
@@ -1421,6 +1475,12 @@ class AppHandler(BaseHTTPRequestHandler):
             now = datetime.now().isoformat(timespec="seconds")
             current_user = self.current_user()
             with connect() as db:
+                allowed_teacher_ids = teacher_ids_for_user(db, current_user)
+                if allowed_teacher_ids is not None and data["teacher_id"] not in allowed_teacher_ids:
+                    raise ValueError("当前账号不能为该教师记录课时")
+                teacher = db.execute("SELECT id FROM teachers WHERE id = ? AND active = 1", (data["teacher_id"],)).fetchone()
+                if not teacher:
+                    raise ValueError("教师不存在")
                 student = db.execute("SELECT * FROM students WHERE id = ?", (data["student_id"],)).fetchone()
                 if not student:
                     raise ValueError("学员不存在")
@@ -1434,8 +1494,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 cursor = db.execute(
                     """
                     INSERT INTO hour_transactions
-                        (student_id, action, amount, delta, balance_after, note, operator_id, occurred_at, created_at)
-                    VALUES (:student_id, :action, :amount, :delta, :balance_after, :note, :operator_id, :occurred_at, :created_at)
+                        (student_id, teacher_id, action, amount, delta, balance_after, note, operator_id, occurred_at, created_at)
+                    VALUES (:student_id, :teacher_id, :action, :amount, :delta, :balance_after, :note, :operator_id, :occurred_at, :created_at)
                     """,
                     {
                         **data,
@@ -1447,9 +1507,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 )
                 row = db.execute(
                     """
-                    SELECT h.*, s.name AS student_name, s.course AS course_name, u.name AS operator_name
+                    SELECT h.*, s.name AS student_name, s.course AS course_name,
+                        t.display_name AS teacher_name, u.name AS operator_name
                     FROM hour_transactions h
                     JOIN students s ON s.id = h.student_id
+                    LEFT JOIN teachers t ON t.id = h.teacher_id
                     LEFT JOIN users u ON u.id = h.operator_id
                     WHERE h.id = ?
                     """,
