@@ -3,7 +3,9 @@ let currentUser = null;
 let students = [];
 let catalog = { courses: [], classes: [], teachers: [], rooms: [] };
 let users = [];
+let leads = [];
 let catalogView = "courses";
+let activeScheduleDay = todayScheduleIndex();
 let dashboardStats = {
   totalStudents: 0,
   activeStudents: 0,
@@ -17,15 +19,7 @@ const dashboardClasses = [
   { time: "18:30", duration: "60 分钟", name: "演讲与口才一对一", room: "星光教室 · A205", teacher: "方老师", teacherKey: "方", current: 1, max: 1, color: "#4f896f" },
 ];
 
-const leads = [
-  { name: "林可昕", age: 7, stage: "新线索", source: "大众点评", note: "希望改善胆小、不敢表达的问题", time: "10 分钟前", tag: "主持" },
-  { name: "唐子墨", age: 9, stage: "新线索", source: "老带新", note: "对朗诵和舞台表演有兴趣", time: "1 小时前", tag: "朗诵" },
-  { name: "韩雨桐", age: 6, stage: "已联系", source: "公众号", note: "妈妈周末方便带孩子来试听", time: "今天 10:20", tag: "启蒙" },
-  { name: "宋安然", age: 10, stage: "已联系", source: "地推活动", note: "有学校主持经验，想系统提升", time: "昨天", tag: "主持" },
-  { name: "程知远", age: 8, stage: "待试听", source: "小红书", note: "已约本周六 15:00 体验课", time: "周六 15:00", tag: "口才" },
-  { name: "叶舒然", age: 11, stage: "待试听", source: "视频号", note: "准备校内演讲比赛", time: "周日 10:00", tag: "演讲" },
-  { name: "温以宁", age: 7, stage: "待报名", source: "老带新", note: "试听反馈很好，待确认班级时间", time: "跟进 2 次", tag: "朗诵" },
-];
+const leadStages = ["新线索", "已联系", "待试听", "待报名", "已报名"];
 
 const pageMeta = {
   dashboard: ["总览", "下午好，林老师"],
@@ -77,6 +71,11 @@ function icon(id) {
   return `<svg><use href="#icon-${id}"></use></svg>`;
 }
 
+function todayScheduleIndex() {
+  const day = new Date().getDay();
+  return day === 0 ? 6 : day - 1;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -111,6 +110,10 @@ async function loadCatalog() {
 
 async function loadUsers() {
   users = await api("/api/users");
+}
+
+async function loadLeads() {
+  leads = await api("/api/leads");
 }
 
 function showLogin(message = "") {
@@ -444,34 +447,198 @@ function classStatusColor(status) {
 
 function renderSchedule() {
   const days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+  const weekDates = currentWeekDates();
+  const activeClasses = catalog.classes
+    .filter(item => Number(item.weekday) === activeScheduleDay)
+    .sort((a, b) => a.start_time.localeCompare(b.start_time));
+  const weeklyCount = catalog.classes.filter(item => ["招生中", "进行中"].includes(item.status)).length;
+  const weeklyCapacity = catalog.classes.reduce((sum, item) => sum + Number(item.current || 0), 0);
   pageContent.innerHTML = `
     <div class="section-toolbar">
-      <div><h2>6 月 8 日 - 6 月 14 日</h2><p>本周共 21 节课，预计到课 146 人次</p></div>
-      <div class="toolbar-actions"><button class="secondary-button">今天</button>${can("catalog:write") ? `<button class="primary-button">${icon("plus")} 新建课程</button>` : ""}</div>
+      <div><h2>${formatWeekRange(weekDates)}</h2><p>本周 ${weeklyCount} 个活跃班级，已分班 ${weeklyCapacity} 人</p></div>
+      <div class="toolbar-actions"><button class="secondary-button schedule-today">今天</button>${can("catalog:write") ? `<button class="primary-button schedule-new-class">${icon("plus")} 新建班级</button>` : ""}</div>
     </div>
-    <div class="week-strip">${days.map((d, i) => `<button class="day-button ${i === 5 ? "active" : ""}"><span>${d}</span><strong>${8 + i}</strong></button>`).join("")}</div>
+    <div class="week-strip">${days.map((day, index) => `<button class="day-button ${index === activeScheduleDay ? "active" : ""}" data-schedule-day="${index}"><span>${day}</span><strong>${weekDates[index].getDate()}</strong></button>`).join("")}</div>
     <div class="schedule-board">
-      <div class="time-rail">${["14:00", "15:30", "17:00", "18:30"].map(t => `<div class="time-slot">${t}</div>`).join("")}</div>
+      <div class="time-rail">${scheduleTimeSlots(activeClasses).map(t => `<div class="time-slot">${t}</div>`).join("")}</div>
       <div class="schedule-lane">
-        ${dashboardClasses.map(c => `<article class="schedule-event" style="--event-color:${c.color}"><span class="color-pill"></span><div><strong>${c.name}</strong><small>${c.time} · ${c.duration} · ${c.room}</small></div><div class="schedule-meta"><b>${c.teacher}</b>${c.current}/${c.max} 人</div></article>`).join("")}
-        <article class="schedule-event" style="--event-color:#507b9d"><span class="color-pill"></span><div><strong>舞台表演启蒙班</strong><small>19:40 · 60 分钟 · 剧场教室 B101</small></div><div class="schedule-meta"><b>顾老师</b>7/10 人</div></article>
+        ${activeClasses.length ? activeClasses.map(item => `<article class="schedule-event" style="--event-color:${escapeHtml(item.course_color)}">
+          <span class="color-pill"></span>
+          <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.start_time)} · ${item.duration} 分钟 · ${escapeHtml(item.room_name)} ${escapeHtml(item.room_code)} · ${escapeHtml(item.course_name)}</small></div>
+          <div class="schedule-meta"><b>${escapeHtml(item.teacher_name)}</b>${item.current}/${item.capacity} 人<br><button class="text-button manage-roster" data-id="${item.id}">花名册</button></div>
+        </article>`).join("") : `<div class="empty-state">这一天还没有排课，可以到「课程与班级」中新建班级。</div>`}
       </div>
     </div>`;
 }
 
+function currentWeekDates() {
+  const today = new Date();
+  const monday = new Date(today);
+  const offset = today.getDay() === 0 ? -6 : 1 - today.getDay();
+  monday.setDate(today.getDate() + offset);
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    return date;
+  });
+}
+
+function formatWeekRange(dates) {
+  const start = dates[0];
+  const end = dates[6];
+  return `${start.getMonth() + 1} 月 ${start.getDate()} 日 - ${end.getMonth() + 1} 月 ${end.getDate()} 日`;
+}
+
+function scheduleTimeSlots(items) {
+  const slots = [...new Set(items.map(item => item.start_time))];
+  return slots.length ? slots : ["09:00", "14:00", "18:30"];
+}
+
 function renderLeads() {
-  const stages = ["新线索", "已联系", "待试听", "待报名"];
+  const activeLeads = leads.filter(lead => lead.stage !== "无效");
   pageContent.innerHTML = `
     <div class="section-toolbar">
-      <div><h2>招生跟进看板</h2><p>拖动式流程将在正式版接入，当前可查看完整跟进状态</p></div>
-      <div class="toolbar-actions"><button class="secondary-button">${icon("filter")} 筛选</button>${can("leads:write") ? `<button class="primary-button">${icon("plus")} 新增线索</button>` : ""}</div>
+      <div><h2>招生跟进看板</h2><p>${activeLeads.length} 条有效线索，电话跟进和阶段推进会自动保存</p></div>
+      <div class="toolbar-actions"><button class="secondary-button render-invalid-leads">${icon("filter")} 无效 ${leads.filter(lead => lead.stage === "无效").length}</button>${can("leads:write") ? `<button class="primary-button add-lead">${icon("plus")} 新增线索</button>` : ""}</div>
     </div>
-    <div class="lead-board">${stages.map(stage => {
-      const items = leads.filter(l => l.stage === stage);
+    <div class="lead-board">${leadStages.map(stage => {
+      const items = activeLeads.filter(lead => lead.stage === stage);
       return `<section class="lead-column"><div class="lead-column-header"><strong>${stage}</strong><span class="lead-count">${items.length}</span></div>
-        ${items.map(l => `<article class="lead-card"><div class="lead-card-top"><h3>${l.name} · ${l.age}岁</h3><span class="tag" style="--tag-color:#ff9f1c">${l.tag}</span></div><p>${l.note}</p><div class="lead-card-footer"><span>${l.source} · ${l.time}</span><button class="phone-button" data-call="${l.name}">${icon("phone")}</button></div></article>`).join("")}
+        ${items.length ? items.map(leadCard).join("") : `<div class="lead-empty">暂无线索</div>`}
       </section>`;
     }).join("")}</div>`;
+}
+
+function renderInvalidLeads() {
+  const invalidLeads = leads.filter(lead => lead.stage === "无效");
+  pageContent.innerHTML = `
+    <div class="section-toolbar">
+      <div><h2>无效线索</h2><p>这些记录会保留在系统里，方便之后复盘来源质量</p></div>
+      <div class="toolbar-actions"><button class="secondary-button back-to-leads">${icon("arrow")} 返回看板</button></div>
+    </div>
+    <div class="table-card">
+      <table class="data-table">
+        <thead><tr><th>姓名</th><th>年龄</th><th>电话</th><th>来源</th><th>意向</th><th>备注</th><th></th></tr></thead>
+        <tbody>${invalidLeads.length ? invalidLeads.map(lead => `<tr>
+          <td><strong>${escapeHtml(lead.name)}</strong></td>
+          <td>${lead.age} 岁</td>
+          <td>${escapeHtml(lead.phone)}</td>
+          <td>${escapeHtml(lead.source || "未填写")}</td>
+          <td><span class="tag" style="--tag-color:#8a827b">${escapeHtml(lead.tag || "未确认")}</span></td>
+          <td><small>${escapeHtml(lead.note || "无备注")}</small></td>
+          <td>${can("leads:write") ? `<button class="table-action edit-lead" data-id="${lead.id}" aria-label="编辑 ${escapeHtml(lead.name)}">${icon("edit")}</button>` : ""}</td>
+        </tr>`).join("") : `<tr><td colspan="7"><div class="empty-state">还没有无效线索</div></td></tr>`}</tbody>
+      </table>
+    </div>`;
+}
+
+function leadCard(lead) {
+  const nextStage = leadStages[leadStages.indexOf(lead.stage) + 1];
+  return `<article class="lead-card">
+    <div class="lead-card-top"><h3>${escapeHtml(lead.name)} · ${lead.age}岁</h3><span class="tag" style="--tag-color:#ff9f1c">${escapeHtml(lead.tag || "待确认")}</span></div>
+    <p>${escapeHtml(lead.note || "暂未填写跟进备注")}</p>
+    <div class="lead-meta">
+      <span>来源：${escapeHtml(lead.source || "未填写")}</span>
+      <span>电话：${escapeHtml(lead.phone)}</span>
+      <span>跟进：${lead.follow_count || 0} 次</span>
+      ${lead.next_follow_at ? `<span>下次：${escapeHtml(lead.next_follow_at)}</span>` : ""}
+    </div>
+    <div class="lead-card-footer">
+      <span>${lead.last_contact_at ? `最近联系 ${formatShortTime(lead.last_contact_at)}` : "尚未电话联系"}</span>
+      <div class="lead-actions">
+        ${can("leads:write") ? `<button class="phone-button contact-lead" data-id="${lead.id}" title="记录电话跟进">${icon("phone")}</button>
+        <button class="table-action edit-lead" data-id="${lead.id}" title="编辑线索">${icon("edit")}</button>
+        ${nextStage ? `<button class="text-button advance-lead" data-id="${lead.id}" data-stage="${nextStage}">推进</button>` : ""}
+        <button class="table-action danger invalid-lead" data-id="${lead.id}" title="标记无效">${icon("trash")}</button>` : `<span class="readonly-note">只读</span>`}
+      </div>
+    </div>
+  </article>`;
+}
+
+function formatShortTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function openLeadModal(lead = null) {
+  const form = document.querySelector("#leadForm");
+  form.reset();
+  form.elements.id.value = lead?.id || "";
+  document.querySelector("#leadTitle").textContent = lead ? "编辑招生线索" : "新增招生线索";
+  document.querySelector("#leadEyebrow").textContent = lead ? "更新跟进信息" : "记录意向家长";
+  document.querySelector("#saveLead").textContent = lead ? "保存修改" : "保存线索";
+  if (lead) {
+    for (const field of ["name", "age", "phone", "source", "tag", "stage", "next_follow_at", "note"]) {
+      form.elements[field].value = lead[field] ?? "";
+    }
+  } else {
+    form.elements.stage.value = "新线索";
+  }
+  document.querySelector("#leadBackdrop").hidden = false;
+  setTimeout(() => form.elements.name.focus(), 30);
+}
+
+function closeLeadModal() {
+  document.querySelector("#leadBackdrop").hidden = true;
+}
+
+async function saveLead(event) {
+  event.preventDefault();
+  if (!can("leads:write")) {
+    showToast("当前角色不能修改招生线索");
+    return;
+  }
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const leadId = data.id;
+  delete data.id;
+  data.age = Number(data.age);
+  const button = document.querySelector("#saveLead");
+  button.classList.add("button-loading");
+  button.textContent = "保存中...";
+  try {
+    await api(leadId ? `/api/leads/${leadId}` : "/api/leads", {
+      method: leadId ? "PUT" : "POST",
+      body: JSON.stringify(data),
+    });
+    closeLeadModal();
+    showToast(`线索 ${data.name} 已${leadId ? "更新" : "添加"}`);
+    await renderPage("leads");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.classList.remove("button-loading");
+    button.textContent = leadId ? "保存修改" : "保存线索";
+  }
+}
+
+async function contactLead(leadId) {
+  const lead = leads.find(item => item.id === leadId);
+  if (!lead) return;
+  try {
+    await api(`/api/leads/${leadId}/contact`, { method: "POST" });
+    showToast(`已记录 ${lead.name} 的电话跟进`);
+    await renderPage("leads");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function updateLeadStage(leadId, stage) {
+  const lead = leads.find(item => item.id === leadId);
+  if (!lead) return;
+  try {
+    await api(`/api/leads/${leadId}`, {
+      method: "PUT",
+      body: JSON.stringify({ ...lead, stage }),
+    });
+    showToast(`线索 ${lead.name} 已更新为「${stage}」`);
+    await renderPage("leads");
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 function renderHours() {
@@ -581,11 +748,17 @@ async function renderPage(page, query = "") {
       await loadUsers();
       renderSettings();
     }
+    if (page === "schedule") {
+      await Promise.all([loadCatalog(), loadStudents()]);
+      renderSchedule();
+    }
+    if (page === "leads") {
+      await loadLeads();
+      renderLeads();
+    }
   } catch (error) {
     renderConnectionError(error.message);
   }
-  if (page === "schedule") renderSchedule();
-  if (page === "leads") renderLeads();
   if (page === "hours") renderHours();
   if (page === "teaching") renderPlaceholder(page);
   document.querySelector(".sidebar").classList.remove("open");
@@ -778,7 +951,7 @@ function closeRoster() {
   document.querySelector("#rosterBackdrop").hidden = true;
 }
 
-document.addEventListener("click", event => {
+document.addEventListener("click", async event => {
   const nav = event.target.closest(".nav-item");
   if (nav && canOpenPage(nav.dataset.page)) renderPage(nav.dataset.page);
 
@@ -790,6 +963,23 @@ document.addEventListener("click", event => {
 
   const call = event.target.closest("[data-call]");
   if (call) showToast(`已记录对 ${call.dataset.call} 的电话跟进`);
+
+  const scheduleDay = event.target.closest("[data-schedule-day]");
+  if (scheduleDay) {
+    activeScheduleDay = Number(scheduleDay.dataset.scheduleDay);
+    renderSchedule();
+  }
+
+  if (event.target.closest(".schedule-today")) {
+    activeScheduleDay = todayScheduleIndex();
+    renderSchedule();
+  }
+
+  if (event.target.closest(".schedule-new-class") && can("catalog:write")) {
+    catalogView = "classes";
+    await renderPage("catalog");
+    openClassModal();
+  }
 
   const edit = event.target.closest(".edit-student");
   if (edit) {
@@ -838,6 +1028,31 @@ document.addEventListener("click", event => {
   const roster = event.target.closest(".manage-roster");
   if (roster) openRoster(Number(roster.dataset.id));
 
+  if (event.target.closest(".add-lead") && can("leads:write")) openLeadModal();
+
+  const editLead = event.target.closest(".edit-lead");
+  if (editLead) {
+    const lead = leads.find(item => item.id === Number(editLead.dataset.id));
+    if (lead) openLeadModal(lead);
+  }
+
+  const contactButton = event.target.closest(".contact-lead");
+  if (contactButton) contactLead(Number(contactButton.dataset.id));
+
+  const advanceLead = event.target.closest(".advance-lead");
+  if (advanceLead) updateLeadStage(Number(advanceLead.dataset.id), advanceLead.dataset.stage);
+
+  const invalidLead = event.target.closest(".invalid-lead");
+  if (invalidLead) {
+    const lead = leads.find(item => item.id === Number(invalidLead.dataset.id));
+    if (lead && window.confirm(`确定将「${lead.name}」标记为无效线索吗？`)) {
+      updateLeadStage(lead.id, "无效");
+    }
+  }
+
+  if (event.target.closest(".render-invalid-leads")) renderInvalidLeads();
+  if (event.target.closest(".back-to-leads")) renderLeads();
+
   const enroll = event.target.closest(".enroll-student");
   if (enroll) enrollStudent(Number(enroll.dataset.id));
 
@@ -879,6 +1094,11 @@ document.querySelector("#managementBackdrop").addEventListener("click", event =>
 document.querySelector("#closeRoster").addEventListener("click", closeRoster);
 document.querySelector("#rosterBackdrop").addEventListener("click", event => {
   if (event.target.id === "rosterBackdrop") closeRoster();
+});
+document.querySelector("#closeLead").addEventListener("click", closeLeadModal);
+document.querySelector("#cancelLead").addEventListener("click", closeLeadModal);
+document.querySelector("#leadBackdrop").addEventListener("click", event => {
+  if (event.target.id === "leadBackdrop") closeLeadModal();
 });
 document.querySelector("#loginForm").addEventListener("submit", handleLogin);
 document.querySelector("#logoutButton").addEventListener("click", logout);
@@ -953,6 +1173,8 @@ document.querySelector("#managementForm").addEventListener("submit", async event
   }
 });
 
+document.querySelector("#leadForm").addEventListener("submit", saveLead);
+
 document.addEventListener("submit", async event => {
   if (event.target.id !== "userForm") return;
   event.preventDefault();
@@ -996,6 +1218,7 @@ document.addEventListener("keydown", event => {
     closeModal();
     closeManagement();
     closeRoster();
+    closeLeadModal();
   }
 });
 

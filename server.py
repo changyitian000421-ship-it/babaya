@@ -103,6 +103,18 @@ SEED_CLASSES = [
     ("表演启蒙 A 班", "舞台表演启蒙班", "顾老师", "B101", 5, "19:40", 60, 10, "招生中"),
 ]
 
+LEAD_STAGES = ("新线索", "已联系", "待试听", "待报名", "已报名", "无效")
+
+SEED_LEADS = [
+    ("林可昕", 7, "139****1021", "大众点评", "新线索", "主持", "希望改善胆小、不敢表达的问题", ""),
+    ("唐子墨", 9, "136****7782", "老带新", "新线索", "朗诵", "对朗诵和舞台表演有兴趣", ""),
+    ("韩雨桐", 6, "188****2365", "公众号", "已联系", "启蒙", "妈妈周末方便带孩子来试听", ""),
+    ("宋安然", 10, "137****6119", "地推活动", "已联系", "主持", "有学校主持经验，想系统提升", ""),
+    ("程知远", 8, "150****0927", "小红书", "待试听", "口才", "已约本周六 15:00 体验课", "周六 15:00"),
+    ("叶舒然", 11, "152****5180", "视频号", "待试听", "演讲", "准备校内演讲比赛", "周日 10:00"),
+    ("温以宁", 7, "138****9204", "老带新", "待报名", "朗诵", "试听反馈很好，待确认班级时间", ""),
+]
+
 
 class DictRow(dict):
     def __getitem__(self, key):
@@ -264,7 +276,7 @@ def translate_postgres_sql(sql: str) -> str:
 
 
 def should_return_id(sql: str) -> bool:
-    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users)\b", sql, re.IGNORECASE))
+    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads)\b", sql, re.IGNORECASE))
 
 
 def postgres_schema(script: str) -> str:
@@ -496,6 +508,25 @@ def initialize_database() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                age INTEGER NOT NULL CHECK (age BETWEEN 3 AND 18),
+                phone TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                stage TEXT NOT NULL DEFAULT '新线索',
+                tag TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                next_follow_at TEXT NOT NULL DEFAULT '',
+                last_contact_at TEXT NOT NULL DEFAULT '',
+                follow_count INTEGER NOT NULL DEFAULT 0 CHECK (follow_count >= 0),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
+            CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);
             """
         db.executescript(postgres_schema(schema_sql) if DATABASE_KIND == "postgres" else schema_sql)
         ensure_user_schema(db)
@@ -570,6 +601,15 @@ def initialize_database() -> None:
                     (username, phone, hash_password(password), name, role, now, now)
                     for username, phone, password, name, role in SEED_USERS
                 ],
+            )
+        if db.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 0:
+            db.executemany(
+                """
+                INSERT INTO leads
+                    (name, age, phone, source, stage, tag, note, next_follow_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [(*lead, now, now) for lead in SEED_LEADS],
             )
 
 
@@ -699,6 +739,35 @@ def class_to_dict(row: sqlite3.Row, students: list[dict] | None = None) -> dict:
     item["students"] = students or []
     item["current"] = len(item["students"])
     return item
+
+
+def lead_to_dict(row: sqlite3.Row) -> dict:
+    return dict(row)
+
+
+def validate_lead(payload: dict) -> dict:
+    name = str(payload.get("name", "")).strip()
+    age = integer_value(payload, "age", "年龄", 3)
+    phone = str(payload.get("phone", "")).strip()
+    stage = str(payload.get("stage", "新线索")).strip()
+    if not name:
+        raise ValueError("请填写线索姓名")
+    if age > 18:
+        raise ValueError("年龄需要在 3-18 岁之间")
+    if not phone or len(phone) < 7:
+        raise ValueError("请填写有效联系电话")
+    if stage not in LEAD_STAGES:
+        raise ValueError("线索阶段无效")
+    return {
+        "name": name,
+        "age": age,
+        "phone": phone,
+        "source": str(payload.get("source", "")).strip(),
+        "stage": stage,
+        "tag": str(payload.get("tag", "")).strip(),
+        "note": str(payload.get("note", "")).strip(),
+        "next_follow_at": str(payload.get("next_follow_at", "")).strip(),
+    }
 
 
 def validate_student(payload: dict, partial: bool = False) -> dict:
@@ -903,6 +972,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.get_dashboard()
             return
+        if parsed.path == "/api/leads":
+            if not self.require_permission("leads:read"):
+                return
+            self.get_leads(parse_qs(parsed.query))
+            return
         if parsed.path.startswith("/api/"):
             self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
             return
@@ -954,11 +1028,21 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.create_room()
             return
+        if path == "/api/leads":
+            if not self.require_permission("leads:write"):
+                return
+            self.create_lead()
+            return
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "students":
             if not self.require_permission("roster:write"):
                 return
             self.enroll_student(parts[2])
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "leads"] and parts[3] == "contact":
+            if not self.require_permission("leads:write"):
+                return
+            self.contact_lead(parts[2])
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
 
@@ -1024,6 +1108,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("settings:write"):
                 return
             self.update_user(item_id)
+            return
+        if resource == "leads":
+            if not self.require_permission("leads:write"):
+                return
+            self.update_lead(item_id)
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
 
@@ -1093,7 +1182,98 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.delete_user(item_id)
             return
+        if parts[1] == "leads":
+            if not self.require_permission("leads:write"):
+                return
+            self.delete_lead(item_id)
+            return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
+
+    def get_leads(self, query: dict) -> None:
+        stage = query.get("stage", [""])[0].strip()
+        sql = "SELECT * FROM leads"
+        params: tuple = ()
+        if stage:
+            sql += " WHERE stage = ?"
+            params = (stage,)
+        sql += " ORDER BY updated_at DESC, id DESC"
+        with connect() as db:
+            rows = db.execute(sql, params).fetchall()
+        self.send_json([lead_to_dict(row) for row in rows])
+
+    def create_lead(self) -> None:
+        try:
+            data = validate_lead(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                cursor = db.execute(
+                    """
+                    INSERT INTO leads
+                        (name, age, phone, source, stage, tag, note, next_follow_at, created_at, updated_at)
+                    VALUES (:name, :age, :phone, :source, :stage, :tag, :note, :next_follow_at, :created_at, :updated_at)
+                    """,
+                    {**data, "created_at": now, "updated_at": now},
+                )
+                row = db.execute("SELECT * FROM leads WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(lead_to_dict(row), HTTPStatus.CREATED)
+
+    def update_lead(self, lead_id: int) -> None:
+        try:
+            data = validate_lead(self.read_json())
+            data.update({"id": lead_id, "updated_at": datetime.now().isoformat(timespec="seconds")})
+            with connect() as db:
+                if not db.execute("SELECT id FROM leads WHERE id = ?", (lead_id,)).fetchone():
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "线索不存在")
+                    return
+                db.execute(
+                    """
+                    UPDATE leads SET
+                        name=:name, age=:age, phone=:phone, source=:source, stage=:stage,
+                        tag=:tag, note=:note, next_follow_at=:next_follow_at, updated_at=:updated_at
+                    WHERE id=:id
+                    """,
+                    data,
+                )
+                row = db.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(lead_to_dict(row))
+
+    def contact_lead(self, raw_lead_id: str) -> None:
+        try:
+            lead_id = int(raw_lead_id)
+        except ValueError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "编号无效")
+            return
+        now = datetime.now().isoformat(timespec="seconds")
+        with connect() as db:
+            row = db.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+            if not row:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "线索不存在")
+                return
+            next_stage = "已联系" if row["stage"] == "新线索" else row["stage"]
+            db.execute(
+                """
+                UPDATE leads SET stage = ?, follow_count = follow_count + 1,
+                    last_contact_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_stage, now, now, lead_id),
+            )
+            row = db.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        self.send_json(lead_to_dict(row))
+
+    def delete_lead(self, lead_id: int) -> None:
+        with connect() as db:
+            cursor = db.execute("DELETE FROM leads WHERE id = ?", (lead_id,))
+        if cursor.rowcount == 0:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "线索不存在")
+            return
+        self.send_json({"deleted": True, "id": lead_id})
 
     def get_users(self) -> None:
         with connect() as db:

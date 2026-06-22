@@ -271,13 +271,16 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
 .schedule-event strong { display: block; font-size: 12px; }.schedule-event small { color: var(--muted); font-size: 9px; }
 .schedule-meta { color: var(--muted); font-size: 10px; text-align: right; }.schedule-meta b { display: block; color: var(--ink); font-size: 11px; }
 
-.lead-board { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 13px; overflow-x: auto; }
+.lead-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 13px; overflow-x: auto; }
 .lead-column { min-height: 480px; padding: 12px; border: 1px solid var(--line); border-radius: 17px; background: rgba(255,254,250,.55); }
 .lead-column-header { display: flex; align-items: center; justify-content: space-between; padding: 3px 4px 13px; }
 .lead-column-header strong { font-size: 12px; }.lead-count { min-width: 22px; padding: 3px 6px; border-radius: 12px; color: var(--muted); background: var(--line); font-size: 9px; text-align: center; }
 .lead-card { margin-bottom: 9px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--white); box-shadow: 0 5px 15px rgba(54,44,35,.025); }
 .lead-card-top { display: flex; justify-content: space-between; }.lead-card h3 { margin: 0; font-size: 12px; }.lead-card p { margin: 7px 0 12px; color: var(--muted); font-size: 9px; line-height: 1.55; }
-.lead-card-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px solid #f1ede9; color: var(--muted); font-size: 9px; }
+.lead-meta { display: grid; gap: 5px; margin-bottom: 10px; color: var(--muted); font-size: 9px; }
+.lead-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding-top: 10px; border-top: 1px solid #f1ede9; color: var(--muted); font-size: 9px; }
+.lead-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.lead-empty { padding: 28px 10px; border: 1px dashed var(--line); border-radius: 13px; color: var(--muted); background: rgba(255,255,255,.55); font-size: 10px; text-align: center; }
 .phone-button { width: 27px; height: 27px; display: grid; place-items: center; border: 0; border-radius: 8px; color: var(--accent); background: var(--accent-soft); cursor: pointer; }.phone-button svg { width: 12px; }
 
 .hours-summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 17px; }
