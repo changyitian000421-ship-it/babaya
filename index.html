@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="声动语言艺术培训管理系统" />
-    <title>声动 · 教培管理系统</title>
+    <meta name="description" content="芭芭鸭语言艺术培训中心教培管理系统" />
+    <title>芭芭鸭 · 语言艺术培训中心</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -16,17 +16,18 @@
   <body>
     <section class="login-screen" id="loginScreen" hidden>
       <div class="login-card">
+        <div class="login-logo-wrap">
+          <img class="login-logo" src="./assets/babaya-logo-full.png" alt="芭芭鸭语言艺术培训中心" />
+        </div>
         <div class="brand login-brand">
-          <div class="brand-mark" aria-hidden="true">
-            <span></span><span></span><span></span><span></span>
-          </div>
+          <img class="brand-logo" src="./assets/babaya-duck-mark.png" alt="" aria-hidden="true" />
           <div>
-            <strong>声动</strong>
-            <small>角色登录</small>
+            <strong>芭芭鸭</strong>
+            <small>语言艺术培训中心</small>
           </div>
         </div>
-        <h1>进入教培管理系统</h1>
-        <p>不同角色登录后，只显示自己需要处理的功能。</p>
+        <h1>进入芭芭鸭教培系统</h1>
+        <p>把课程、学员、班级和老师都装进一个轻快好用的工作台。</p>
         <form id="loginForm" class="login-form">
           <label><span>手机号</span><input name="phone" autocomplete="username" required placeholder="例如：13800000001" /></label>
           <label><span>密码</span><input name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" /></label>
@@ -46,12 +47,10 @@
     <div class="app-shell" id="appShell" hidden>
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark" aria-hidden="true">
-            <span></span><span></span><span></span><span></span>
-          </div>
+          <img class="brand-logo" src="./assets/babaya-duck-mark.png" alt="" aria-hidden="true" />
           <div>
-            <strong>声动</strong>
-            <small>语言艺术教育</small>
+            <strong>芭芭鸭</strong>
+            <small>语言艺术培训中心</small>
           </div>
         </div>
 

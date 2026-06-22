@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shengdong training management MVP server.
+"""Babaya training management MVP server.
 
 Serves the static frontend and a small JSON API backed by SQLite.
 """
@@ -33,7 +33,7 @@ HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "4173"))
 
 STATUSES = {"在读", "待续费", "请假中", "待分班", "停课"}
-COLORS = ["#e8664a", "#715b87", "#4f896f", "#c89436", "#507b9d"]
+COLORS = ["#ff9f1c", "#ffd33d", "#f47a12", "#715b87", "#4f896f"]
 SESSION_COOKIE = "sd_session"
 SESSION_HOURS = 12
 
@@ -69,7 +69,7 @@ SEED_USERS = [
 ]
 
 SEED_STUDENTS = [
-    ("顾言溪", 8, "顾女士", "138****2168", "少儿主持基础班", 24, "在读", "#e8664a", ""),
+    ("顾言溪", 8, "顾女士", "138****2168", "少儿主持基础班", 24, "在读", "#ff9f1c", ""),
     ("周亦辰", 10, "周先生", "186****5372", "朗诵表达进阶班", 16, "在读", "#715b87", ""),
     ("许星禾", 7, "许女士", "135****8906", "舞台表演启蒙班", 30, "在读", "#4f896f", ""),
     ("沈嘉树", 11, "沈先生", "159****4381", "演讲与口才一对一", 8, "待续费", "#c89436", ""),
@@ -77,14 +77,14 @@ SEED_STUDENTS = [
 ]
 
 SEED_COURSES = [
-    ("少儿主持基础班", "主持", "6-9 岁", 24, 90, 4680, "#e8664a", "启用", "建立舞台自信，掌握主持礼仪与基础表达。"),
+    ("少儿主持基础班", "主持", "6-9 岁", 24, 90, 4680, "#ff9f1c", "启用", "建立舞台自信，掌握主持礼仪与基础表达。"),
     ("朗诵表达进阶班", "朗诵", "8-12 岁", 24, 90, 5280, "#715b87", "启用", "提升语音、节奏、情感表达和作品理解能力。"),
     ("舞台表演启蒙班", "表演", "5-8 岁", 30, 60, 4980, "#4f896f", "启用", "通过角色、故事与肢体训练培养表现力。"),
-    ("演讲与口才一对一", "演讲", "8-16 岁", 12, 60, 7200, "#c89436", "启用", "围绕个人目标进行演讲结构与表达训练。"),
+    ("演讲与口才一对一", "演讲", "8-16 岁", 12, 60, 7200, "#f47a12", "启用", "围绕个人目标进行演讲结构与表达训练。"),
 ]
 
 SEED_TEACHERS = [
-    ("陈语安", "陈老师", "主持、少儿口才", "13800001001", "#e8664a"),
+    ("陈语安", "陈老师", "主持、少儿口才", "13800001001", "#ff9f1c"),
     ("苏清禾", "苏老师", "朗诵、语音表达", "13800001002", "#715b87"),
     ("方明远", "方老师", "演讲、赛事辅导", "13800001003", "#4f896f"),
     ("顾南星", "顾老师", "戏剧、舞台表演", "13800001004", "#507b9d"),
@@ -408,7 +408,7 @@ def initialize_database() -> None:
                 course TEXT NOT NULL,
                 hours REAL NOT NULL DEFAULT 0 CHECK (hours >= 0),
                 status TEXT NOT NULL DEFAULT '待分班',
-                color TEXT NOT NULL DEFAULT '#e8664a',
+                color TEXT NOT NULL DEFAULT '#ff9f1c',
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -426,7 +426,7 @@ def initialize_database() -> None:
                 total_hours REAL NOT NULL CHECK (total_hours > 0),
                 lesson_duration INTEGER NOT NULL CHECK (lesson_duration > 0),
                 price REAL NOT NULL CHECK (price >= 0),
-                color TEXT NOT NULL DEFAULT '#e8664a',
+                color TEXT NOT NULL DEFAULT '#ff9f1c',
                 status TEXT NOT NULL DEFAULT '启用',
                 description TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
@@ -439,7 +439,7 @@ def initialize_database() -> None:
                 display_name TEXT NOT NULL UNIQUE,
                 specialty TEXT NOT NULL DEFAULT '',
                 phone TEXT NOT NULL DEFAULT '',
-                color TEXT NOT NULL DEFAULT '#e8664a',
+                color TEXT NOT NULL DEFAULT '#ff9f1c',
                 active INTEGER NOT NULL DEFAULT 1
             );
 
@@ -749,7 +749,7 @@ def validate_student(payload: dict, partial: bool = False) -> dict:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "ShengdongMVP/1.0"
+    server_version = "BabayaMVP/1.0"
 
     def log_message(self, format_string: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {format_string % args}")
@@ -1636,7 +1636,7 @@ class AppHandler(BaseHTTPRequestHandler):
 def run() -> None:
     initialize_database()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
-    print(f"声动教培系统已启动：http://{HOST}:{PORT}")
+    print(f"芭芭鸭教培系统已启动：http://{HOST}:{PORT}")
     if DATABASE_KIND == "turso":
         database_label = f"Turso ({TURSO_DATABASE_URL})"
     elif DATABASE_KIND == "postgres":

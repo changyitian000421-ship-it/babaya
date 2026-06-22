@@ -1,8 +1,8 @@
-# 声动教培系统 MVP
+# 芭芭鸭语言艺术培训中心教培系统 MVP
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/changyitian000421-ship-it/babaya)
 
-语言艺术培训机构管理端第一版，覆盖：
+芭芭鸭语言艺术培训中心管理端第一版，覆盖：
 
 - 经营工作台
 - SQLite 本地持久化数据库
@@ -82,7 +82,7 @@ Render 可以直接读取本项目的 `render.yaml`：
 也可以手动创建 Web Service：
 
 - Runtime：`Python`
-- Build Command：`python -m py_compile server.py`
+- Build Command：`pip install -r requirements.txt && python -m py_compile server.py`
 - Start Command：`python server.py`
 - Environment Variables：
   - `HOST=0.0.0.0`

@@ -12,7 +12,7 @@ let dashboardStats = {
 };
 
 const dashboardClasses = [
-  { time: "14:00", duration: "90 分钟", name: "少儿主持基础班", room: "春日教室 · A203", teacher: "陈老师", teacherKey: "陈", current: 10, max: 12, color: "#e8664a" },
+  { time: "14:00", duration: "90 分钟", name: "少儿主持基础班", room: "春日教室 · A203", teacher: "陈老师", teacherKey: "陈", current: 10, max: 12, color: "#ff9f1c" },
   { time: "16:00", duration: "90 分钟", name: "朗诵表达进阶班", room: "剧场教室 · B101", teacher: "苏老师", teacherKey: "苏", current: 8, max: 10, color: "#715b87" },
   { time: "18:30", duration: "60 分钟", name: "演讲与口才一对一", room: "星光教室 · A205", teacher: "方老师", teacherKey: "方", current: 1, max: 1, color: "#4f896f" },
 ];
@@ -212,8 +212,8 @@ function renderDashboard() {
             <button class="text-button">全部完成</button>
           </div>
           <div class="todo-list">
-            ${todoItem("确认程知远试听课", "与家长确认周六到店时间", "11:30", "#e8664a")}
-            ${todoItem("沈嘉树续费回访", "剩余 8 课时，已触发预警", "今天", "#c89436")}
+            ${todoItem("确认程知远试听课", "与家长确认周六到店时间", "11:30", "#ff9f1c")}
+            ${todoItem("沈嘉树续费回访", "剩余 8 课时，已触发预警", "今天", "#ffd33d")}
             ${todoItem("发布朗诵班课堂点评", "8 位学员等待教师反馈", "课后", "#715b87")}
             ${todoItem("六月课时对账", "核对 6 月 1 日至 12 日记录", "明天", "#4f896f")}
           </div>
@@ -224,9 +224,9 @@ function renderDashboard() {
             <button class="text-button" data-go="leads">进入跟进 ${icon("arrow")}</button>
           </div>
           <div class="funnel">
-            ${funnelRow("新增线索", 42, 100, "#e8664a")}
-            ${funnelRow("预约试听", 28, 67, "#d98265")}
-            ${funnelRow("完成试听", 21, 50, "#b57972")}
+            ${funnelRow("新增线索", 42, 100, "#ff9f1c")}
+            ${funnelRow("预约试听", 28, 67, "#ffb22e")}
+            ${funnelRow("完成试听", 21, 50, "#f47a12")}
             ${funnelRow("成功报名", 18, 43, "#715b87")}
           </div>
         </section>
@@ -414,7 +414,7 @@ function renderRoomGrid() {
   if (!catalog.rooms.length) return `<div class="empty-state">还没有教室</div>`;
   const canManageCatalog = can("catalog:write");
   return `<div class="resource-grid">${catalog.rooms.map(room => `
-    <article class="resource-card" style="--resource-color:#e8664a">
+    <article class="resource-card" style="--resource-color:#ff9f1c">
       <div class="resource-head">
         <span class="room-mark">${escapeHtml(room.code)}</span>
         <div><h3>${escapeHtml(room.name)}</h3><p>教室编号 ${escapeHtml(room.code)}</p></div>
@@ -437,7 +437,7 @@ function weekdayName(value) {
 
 function classStatusColor(status) {
   if (status === "进行中") return "#4f896f";
-  if (status === "招生中") return "#e8664a";
+  if (status === "招生中") return "#ff9f1c";
   if (status === "已结课") return "#715b87";
   return "#8a827b";
 }
@@ -469,7 +469,7 @@ function renderLeads() {
     <div class="lead-board">${stages.map(stage => {
       const items = leads.filter(l => l.stage === stage);
       return `<section class="lead-column"><div class="lead-column-header"><strong>${stage}</strong><span class="lead-count">${items.length}</span></div>
-        ${items.map(l => `<article class="lead-card"><div class="lead-card-top"><h3>${l.name} · ${l.age}岁</h3><span class="tag" style="--tag-color:#e8664a">${l.tag}</span></div><p>${l.note}</p><div class="lead-card-footer"><span>${l.source} · ${l.time}</span><button class="phone-button" data-call="${l.name}">${icon("phone")}</button></div></article>`).join("")}
+        ${items.map(l => `<article class="lead-card"><div class="lead-card-top"><h3>${l.name} · ${l.age}岁</h3><span class="tag" style="--tag-color:#ff9f1c">${l.tag}</span></div><p>${l.note}</p><div class="lead-card-footer"><span>${l.source} · ${l.time}</span><button class="phone-button" data-call="${l.name}">${icon("phone")}</button></div></article>`).join("")}
       </section>`;
     }).join("")}</div>`;
 }
@@ -526,7 +526,7 @@ function renderSettings() {
         <table class="data-table">
           <thead><tr><th>员工</th><th>手机号</th><th>角色</th><th>权限摘要</th><th></th></tr></thead>
           <tbody>${users.map(user => `<tr>
-            <td><div class="student-cell" style="--student-color:#e8664a"><span class="avatar">${escapeHtml(user.name[0] || "员")}</span><div><strong>${escapeHtml(user.name)}</strong><small>ID ${user.id}</small></div></div></td>
+            <td><div class="student-cell" style="--student-color:#ff9f1c"><span class="avatar">${escapeHtml(user.name[0] || "员")}</span><div><strong>${escapeHtml(user.name)}</strong><small>ID ${user.id}</small></div></div></td>
             <td>${escapeHtml(user.phone)}</td>
             <td><span class="tag" style="--tag-color:#715b87">${escapeHtml(user.roleLabel)}</span></td>
             <td><small style="color:var(--muted)">${permissionSummary(user.role)}</small></td>
@@ -613,7 +613,7 @@ function formatToday() {
 
 function statusColor(status) {
   if (status === "在读") return "#4f896f";
-  if (status === "待续费") return "#e8664a";
+  if (status === "待续费") return "#ff9f1c";
   if (status === "停课") return "#8a827b";
   return "#c89436";
 }
@@ -683,7 +683,7 @@ function openCourseModal(course = null) {
     <label><span>单节时长（分钟）</span><input name="lesson_duration" required type="number" min="15" step="5" value="${course?.lesson_duration ?? 90}" /></label>
     <label><span>标准价格（元）</span><input name="price" required type="number" min="0" step="1" value="${course?.price ?? 0}" /></label>
     <label><span>课程状态</span><select name="status"><option ${course?.status !== "停用" ? "selected" : ""}>启用</option><option ${course?.status === "停用" ? "selected" : ""}>停用</option></select></label>
-    <label class="color-field"><span>课程颜色</span><input name="color" type="color" value="${escapeHtml(course?.color || "#e8664a")}" /></label>
+    <label class="color-field"><span>课程颜色</span><input name="color" type="color" value="${escapeHtml(course?.color || "#ff9f1c")}" /></label>
     <label class="full"><span>课程简介</span><textarea name="description" rows="3" placeholder="课程目标与特色">${escapeHtml(course?.description || "")}</textarea></label>`;
   document.querySelector("#managementBackdrop").hidden = false;
   setTimeout(() => form.elements.name.focus(), 30);
@@ -723,7 +723,7 @@ function openTeacherModal(teacher = null) {
     <label><span>教师姓名</span><input name="name" required placeholder="例如：王晓然" value="${escapeHtml(teacher?.name || "")}" /></label>
     <label><span>显示简称</span><input name="display_name" placeholder="例如：王老师" value="${escapeHtml(teacher?.display_name || "")}" /></label>
     <label><span>联系电话</span><input name="phone" type="tel" placeholder="教师电话" value="${escapeHtml(teacher?.phone || "")}" /></label>
-    <label class="color-field"><span>教师颜色</span><input name="color" type="color" value="${escapeHtml(teacher?.color || "#e8664a")}" /></label>
+    <label class="color-field"><span>教师颜色</span><input name="color" type="color" value="${escapeHtml(teacher?.color || "#ff9f1c")}" /></label>
     <label class="full"><span>擅长方向</span><textarea name="specialty" rows="3" placeholder="例如：主持、朗诵、赛事辅导">${escapeHtml(teacher?.specialty || "")}</textarea></label>`;
   document.querySelector("#managementBackdrop").hidden = false;
   setTimeout(() => form.elements.name.focus(), 30);
