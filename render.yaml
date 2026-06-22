@@ -3,7 +3,7 @@ services:
     name: shengdong-training-system
     runtime: python
     plan: free
-    buildCommand: "python -m py_compile server.py"
+    buildCommand: "pip install -r requirements.txt && python -m py_compile server.py"
     startCommand: "python server.py"
     envVars:
       - key: HOST
