@@ -375,6 +375,11 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
 .attendance-statuses { display: flex; gap: 6px; flex-wrap: wrap; }
 .attendance-statuses label { display: inline-flex; align-items: center; gap: 4px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 999px; background: white; font-size: 10px; cursor: pointer; }
 .attendance-row input[name^="note_"] { width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; outline: 0; font-size: 11px; }
+.attendance-page-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.attendance-class-card { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--white); }
+.attendance-class-card .primary-button { width: 100%; justify-content: center; margin-top: 14px; }
+.attendance-card-students { display: flex; gap: 6px; flex-wrap: wrap; min-height: 30px; padding-top: 12px; border-top: 1px solid #f0ece7; }
+.attendance-card-students span { padding: 5px 8px; border-radius: 999px; color: var(--muted); background: #faf8f4; font-size: 10px; }
 
 .placeholder-page { min-height: 540px; display: grid; place-items: center; border: 1px dashed #d8d0c9; border-radius: var(--radius); color: var(--muted); text-align: center; }
 .placeholder-page svg { width: 35px; height: 35px; margin-bottom: 12px; color: var(--accent); }.placeholder-page h2 { margin: 0 0 6px; color: var(--ink); font-size: 18px; }.placeholder-page p { margin: 0; font-size: 11px; }
@@ -469,6 +474,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
   .settings-grid, .settings-layout { grid-template-columns: 1fr; }
   .account-settings-grid, .account-tips { grid-template-columns: 1fr; }
   .account-tips-card { grid-column: auto; }
+  .attendance-page-grid { grid-template-columns: 1fr; }
   .attendance-row { grid-template-columns: 1fr; align-items: stretch; }
 }
 @media (max-width: 480px) {

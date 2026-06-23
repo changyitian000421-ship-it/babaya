@@ -28,6 +28,7 @@ const pageMeta = {
   students: ["教务管理", "学员管理"],
   catalog: ["教务管理", "课程与班级"],
   schedule: ["教务管理", "班级课表"],
+  attendance: ["教学管理", "上课点名"],
   leads: ["招生中心", "招生跟进"],
   hours: ["财务与课消", "课时管理"],
   teaching: ["教学管理", "教学中心"],
@@ -36,9 +37,9 @@ const pageMeta = {
 };
 
 const rolePages = {
-  owner: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching", "account", "settings"],
-  academic: ["dashboard", "students", "catalog", "schedule", "leads", "hours", "teaching", "account"],
-  teacher: ["dashboard", "schedule", "hours", "leads", "teaching", "students", "catalog", "account"],
+  owner: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "hours", "teaching", "account", "settings"],
+  academic: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "hours", "teaching", "account"],
+  teacher: ["dashboard", "schedule", "attendance", "hours", "leads", "teaching", "students", "catalog", "account"],
   sales: ["dashboard", "leads", "students", "account"],
   finance: ["dashboard", "hours", "leads", "students", "account"],
 };
@@ -510,6 +511,52 @@ function renderSchedule() {
         </article>`).join("") : `<div class="empty-state">这一天还没有排课，可以切换日期回溯/查看未来，或新建周期班级。</div>`}
       </div>
     </div>`;
+}
+
+function renderAttendancePage() {
+  const activeDate = currentWeekDates()[activeScheduleDay];
+  const activeDateValue = toDateInputValue(activeDate);
+  const classes = catalog.classes
+    .filter(item => classOccursOnDate(item, activeDate))
+    .filter(item => canManageClassAttendance(item))
+    .sort((a, b) => a.start_time.localeCompare(b.start_time));
+  const totalStudents = classes.reduce((sum, item) => sum + Number(item.current || 0), 0);
+  pageContent.innerHTML = `
+    <div class="section-toolbar">
+      <div><h2>${formatFullDate(activeDate)} 点名</h2><p>${classes.length} 节课，${totalStudents} 名学员待点名；保存后自动生成课时流水</p></div>
+      <div class="toolbar-actions schedule-tools">
+        <button class="secondary-button attendance-prev-day">前一天</button>
+        <input class="schedule-date-picker attendance-date-picker" type="date" value="${activeDateValue}" aria-label="选择点名日期" />
+        <button class="secondary-button attendance-next-day">后一天</button>
+        <button class="secondary-button attendance-today">今天</button>
+      </div>
+    </div>
+    <div class="attendance-page-grid">
+      ${classes.length ? classes.map(item => `<article class="attendance-class-card" style="--class-color:${escapeHtml(item.course_color)}">
+        <div class="class-card-head">
+          <div class="class-card-title"><span class="class-accent"></span><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.course_name)} · ${escapeHtml(item.start_time)}-${escapeHtml(classEndTime(item))}</p></div></div>
+          <span class="tag" style="--tag-color:${classStatusColor(item.status)}">${escapeHtml(item.status)}</span>
+        </div>
+        <div class="class-details">
+          <div class="class-detail"><span>授课教师</span><strong>${escapeHtml(item.teacher_name)}</strong></div>
+          <div class="class-detail"><span>上课教室</span><strong>${escapeHtml(item.room_name)} · ${escapeHtml(item.room_code)}</strong></div>
+          <div class="class-detail"><span>点名人数</span><strong>${item.current} / ${item.capacity} 人</strong></div>
+          <div class="class-detail"><span>自动消课</span><strong>${formatHours(Number(item.duration || 0) / 60)} 课时/人</strong></div>
+        </div>
+        <div class="attendance-card-students">
+          ${item.students.length ? item.students.slice(0, 6).map(student => `<span>${escapeHtml(student.name)}</span>`).join("") : `<span>暂无学员</span>`}
+          ${item.students.length > 6 ? `<span>+${item.students.length - 6}</span>` : ""}
+        </div>
+        <button class="primary-button open-attendance" data-id="${item.id}" ${item.students.length ? "" : "disabled"}>${icon("check")} 开始点名</button>
+      </article>`).join("") : `<div class="placeholder-page"><div>${icon("calendar")}<h2>这一天没有可点名课程</h2><p>可以切换日期，或先到「班级课表」确认课程安排。</p></div></div>`}
+    </div>`;
+}
+
+function canManageClassAttendance(item) {
+  if (!can("hours:write")) return false;
+  if (["owner", "academic", "finance"].includes(currentUser?.role)) return true;
+  const userName = String(currentUser?.name || "").trim();
+  return item.teacher_name === userName;
 }
 
 function currentWeekDates() {
@@ -999,6 +1046,10 @@ async function renderPage(page, query = "") {
       await Promise.all([loadCatalog(), loadStudents()]);
       renderSchedule();
     }
+    if (page === "attendance") {
+      await Promise.all([loadCatalog(), loadStudents()]);
+      renderAttendancePage();
+    }
     if (page === "leads") {
       await loadLeads();
       renderLeads();
@@ -1284,6 +1335,28 @@ document.addEventListener("click", async event => {
     renderSchedule();
   }
 
+  if (event.target.closest(".attendance-prev-day")) {
+    const current = currentWeekDates()[activeScheduleDay];
+    const next = addDays(current, -1);
+    activeWeekStart = startOfWeek(next);
+    activeScheduleDay = weekdayIndexForDate(next);
+    renderAttendancePage();
+  }
+
+  if (event.target.closest(".attendance-next-day")) {
+    const current = currentWeekDates()[activeScheduleDay];
+    const next = addDays(current, 1);
+    activeWeekStart = startOfWeek(next);
+    activeScheduleDay = weekdayIndexForDate(next);
+    renderAttendancePage();
+  }
+
+  if (event.target.closest(".attendance-today")) {
+    activeWeekStart = startOfWeek(new Date());
+    activeScheduleDay = todayScheduleIndex();
+    renderAttendancePage();
+  }
+
   if (event.target.closest(".schedule-prev-week")) {
     activeWeekStart = addDays(activeWeekStart, -7);
     renderSchedule();
@@ -1531,7 +1604,8 @@ document.addEventListener("submit", async event => {
       closeAttendance();
       showToast("点名已保存，课时已自动处理");
       await Promise.all([loadCatalog(), loadStudents(), loadHourTransactions()]);
-      renderSchedule();
+      if (activePage === "attendance") renderAttendancePage();
+      else renderSchedule();
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -1657,6 +1731,13 @@ document.querySelector("#globalSearch").addEventListener("input", event => {
 });
 
 document.addEventListener("change", event => {
+  if (event.target.matches(".attendance-date-picker")) {
+    const pickedDate = dateFromInput(event.target.value);
+    activeWeekStart = startOfWeek(pickedDate);
+    activeScheduleDay = weekdayIndexForDate(pickedDate);
+    renderAttendancePage();
+    return;
+  }
   if (event.target.matches('input[name="avatar_file"]')) {
     handleAvatarFile(event.target);
     return;
