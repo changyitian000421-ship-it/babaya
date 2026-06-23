@@ -367,6 +367,14 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
 .roster-person .avatar { width: 34px; height: 34px; color: var(--person-color); background: color-mix(in srgb, var(--person-color) 14%, white); font-size: 11px; }
 .roster-person strong { display: block; font-size: 12px; }.roster-person small { color: var(--muted); font-size: 9px; }
 .roster-person button { margin-left: auto; }
+.attendance-list { max-height: 520px; overflow-y: auto; padding: 8px 24px 20px; }
+.attendance-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(150px, .7fr); gap: 12px; align-items: center; padding: 13px 0; border-bottom: 1px solid #f0ece7; }
+.attendance-person { display: flex; align-items: center; gap: 11px; }
+.attendance-person .avatar { width: 34px; height: 34px; color: var(--student-color); background: color-mix(in srgb, var(--student-color) 14%, white); font-size: 11px; }
+.attendance-person strong { display: block; font-size: 12px; }.attendance-person small { color: var(--muted); font-size: 9px; }
+.attendance-statuses { display: flex; gap: 6px; flex-wrap: wrap; }
+.attendance-statuses label { display: inline-flex; align-items: center; gap: 4px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 999px; background: white; font-size: 10px; cursor: pointer; }
+.attendance-row input[name^="note_"] { width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; outline: 0; font-size: 11px; }
 
 .placeholder-page { min-height: 540px; display: grid; place-items: center; border: 1px dashed #d8d0c9; border-radius: var(--radius); color: var(--muted); text-align: center; }
 .placeholder-page svg { width: 35px; height: 35px; margin-bottom: 12px; color: var(--accent); }.placeholder-page h2 { margin: 0 0 6px; color: var(--ink); font-size: 18px; }.placeholder-page p { margin: 0; font-size: 11px; }
@@ -461,6 +469,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
   .settings-grid, .settings-layout { grid-template-columns: 1fr; }
   .account-settings-grid, .account-tips { grid-template-columns: 1fr; }
   .account-tips-card { grid-column: auto; }
+  .attendance-row { grid-template-columns: 1fr; align-items: stretch; }
 }
 @media (max-width: 480px) {
   .metric-grid { grid-template-columns: 1fr; }

@@ -192,6 +192,24 @@
       </div>
     </div>
 
+    <div class="modal-backdrop" id="attendanceBackdrop" hidden>
+      <div class="modal roster-modal" role="dialog" aria-modal="true" aria-labelledby="attendanceTitle">
+        <div class="modal-header">
+          <div><small id="attendanceEyebrow">上课点名</small><h2 id="attendanceTitle">班级点名</h2></div>
+          <button class="icon-button" id="closeAttendance" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
+        </div>
+        <form id="attendanceForm">
+          <input type="hidden" name="class_id" />
+          <input type="hidden" name="lesson_date" />
+          <div id="attendanceContent"></div>
+          <div class="modal-footer">
+            <button type="button" class="secondary-button" id="cancelAttendance">取消</button>
+            <button type="submit" class="primary-button" id="saveAttendance">保存点名并自动消课</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div class="modal-backdrop" id="leadBackdrop" hidden>
       <div class="modal management-modal" role="dialog" aria-modal="true" aria-labelledby="leadTitle">
         <div class="modal-header">

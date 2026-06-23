@@ -503,7 +503,10 @@ function renderSchedule() {
         ${activeClasses.length ? activeClasses.map(item => `<article class="schedule-event" style="--event-color:${escapeHtml(item.course_color)}">
           <span class="color-pill"></span>
           <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.start_time)}-${escapeHtml(classEndTime(item))} · ${escapeHtml(item.room_name)} ${escapeHtml(item.room_code)} · ${escapeHtml(item.course_name)} · ${escapeHtml(item.start_date)} 至 ${escapeHtml(item.end_date)}</small></div>
-          <div class="schedule-meta"><b>${escapeHtml(item.teacher_name)}</b>${item.current}/${item.capacity} 人<br><button class="text-button manage-roster" data-id="${item.id}">花名册</button></div>
+          <div class="schedule-meta"><b>${escapeHtml(item.teacher_name)}</b>${item.current}/${item.capacity} 人<br>
+            ${can("hours:write") ? `<button class="text-button open-attendance" data-id="${item.id}">点名</button>` : ""}
+            <button class="text-button manage-roster" data-id="${item.id}">花名册</button>
+          </div>
         </article>`).join("") : `<div class="empty-state">这一天还没有排课，可以切换日期回溯/查看未来，或新建周期班级。</div>`}
       </div>
     </div>`;
@@ -1203,6 +1206,49 @@ function closeRoster() {
   document.querySelector("#rosterBackdrop").hidden = true;
 }
 
+async function openAttendance(classId) {
+  const item = catalog.classes.find(entry => entry.id === classId);
+  if (!item) return;
+  const lessonDate = toDateInputValue(currentWeekDates()[activeScheduleDay]);
+  const lessonHours = Number(item.duration || 0) / 60;
+  let existing = { records: [] };
+  try {
+    existing = await api(`/api/classes/${classId}/attendance?date=${encodeURIComponent(lessonDate)}`);
+  } catch (error) {
+    showToast(error.message);
+    return;
+  }
+  const existingMap = new Map(existing.records.map(record => [Number(record.student_id), record]));
+  const form = document.querySelector("#attendanceForm");
+  form.elements.class_id.value = classId;
+  form.elements.lesson_date.value = lessonDate;
+  document.querySelector("#attendanceTitle").textContent = `${item.name} · ${lessonDate}`;
+  document.querySelector("#attendanceEyebrow").textContent = `每位到课学员自动消课 ${formatHours(lessonHours)} 课时`;
+  document.querySelector("#attendanceContent").innerHTML = `
+    <div class="attendance-list">
+      ${item.students.length ? item.students.map(student => {
+        const record = existingMap.get(student.id);
+        const status = record?.status || "present";
+        return `<div class="attendance-row" data-student-id="${student.id}">
+          <div class="attendance-person">
+            <span class="avatar" style="--student-color:${escapeHtml(student.color)}">${escapeHtml(student.name[0])}</span>
+            <div><strong>${escapeHtml(student.name)}</strong><small>剩余 ${formatHours(student.hours)} 课时 · ${escapeHtml(student.course)}</small></div>
+          </div>
+          <div class="attendance-statuses">
+            ${[["present", "到课"], ["leave", "请假"], ["absent", "缺勤"]].map(([value, label]) => `<label><input type="radio" name="status_${student.id}" value="${value}" ${status === value ? "checked" : ""} />${label}</label>`).join("")}
+          </div>
+          <input name="note_${student.id}" placeholder="备注，可选" value="${escapeHtml(record?.note || "")}" />
+        </div>`;
+      }).join("") : `<div class="roster-empty">这个班级还没有学员，请先加入花名册。</div>`}
+    </div>`;
+  document.querySelector("#saveAttendance").disabled = !item.students.length;
+  document.querySelector("#attendanceBackdrop").hidden = false;
+}
+
+function closeAttendance() {
+  document.querySelector("#attendanceBackdrop").hidden = true;
+}
+
 document.addEventListener("click", async event => {
   const nav = event.target.closest(".nav-item");
   if (nav && canOpenPage(nav.dataset.page)) renderPage(nav.dataset.page);
@@ -1227,7 +1273,7 @@ document.addEventListener("click", async event => {
   if (go) renderPage(go.dataset.go);
 
   const checkin = event.target.closest(".checkin");
-  if (checkin) showToast(`已进入「${checkin.dataset.class}」点名页面`);
+  if (checkin) showToast(`请到「班级课表」选择日期后为「${checkin.dataset.class}」点名`);
 
   const call = event.target.closest("[data-call]");
   if (call) showToast(`已记录对 ${call.dataset.call} 的电话跟进`);
@@ -1307,6 +1353,9 @@ document.addEventListener("click", async event => {
   const roster = event.target.closest(".manage-roster");
   if (roster) openRoster(Number(roster.dataset.id));
 
+  const attendance = event.target.closest(".open-attendance");
+  if (attendance) openAttendance(Number(attendance.dataset.id));
+
   if (event.target.closest(".add-lead") && can("leads:write")) openLeadModal();
 
   const editLead = event.target.closest(".edit-lead");
@@ -1373,6 +1422,11 @@ document.querySelector("#managementBackdrop").addEventListener("click", event =>
 document.querySelector("#closeRoster").addEventListener("click", closeRoster);
 document.querySelector("#rosterBackdrop").addEventListener("click", event => {
   if (event.target.id === "rosterBackdrop") closeRoster();
+});
+document.querySelector("#closeAttendance").addEventListener("click", closeAttendance);
+document.querySelector("#cancelAttendance").addEventListener("click", closeAttendance);
+document.querySelector("#attendanceBackdrop").addEventListener("click", event => {
+  if (event.target.id === "attendanceBackdrop") closeAttendance();
 });
 document.querySelector("#closeLead").addEventListener("click", closeLeadModal);
 document.querySelector("#cancelLead").addEventListener("click", closeLeadModal);
@@ -1455,6 +1509,37 @@ document.querySelector("#managementForm").addEventListener("submit", async event
 document.querySelector("#leadForm").addEventListener("submit", saveLead);
 
 document.addEventListener("submit", async event => {
+  if (event.target.id === "attendanceForm") {
+    event.preventDefault();
+    const form = event.target;
+    const classId = Number(form.elements.class_id.value);
+    const item = catalog.classes.find(entry => entry.id === classId);
+    if (!item) return;
+    const records = item.students.map(student => ({
+      student_id: student.id,
+      status: form.querySelector(`input[name="status_${student.id}"]:checked`)?.value || "present",
+      note: form.elements[`note_${student.id}`]?.value || "",
+    }));
+    const button = document.querySelector("#saveAttendance");
+    button.classList.add("button-loading");
+    button.textContent = "保存中...";
+    try {
+      await api(`/api/classes/${classId}/attendance`, {
+        method: "POST",
+        body: JSON.stringify({ lesson_date: form.elements.lesson_date.value, records }),
+      });
+      closeAttendance();
+      showToast("点名已保存，课时已自动处理");
+      await Promise.all([loadCatalog(), loadStudents(), loadHourTransactions()]);
+      renderSchedule();
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.classList.remove("button-loading");
+      button.textContent = "保存点名并自动消课";
+    }
+    return;
+  }
   if (event.target.id === "profileForm") {
     event.preventDefault();
     const form = event.target;
@@ -1638,6 +1723,7 @@ document.addEventListener("keydown", event => {
     closeModal();
     closeManagement();
     closeRoster();
+    closeAttendance();
     closeLeadModal();
   }
 });

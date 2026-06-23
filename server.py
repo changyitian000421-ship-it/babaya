@@ -112,6 +112,7 @@ HOUR_ACTIONS = {
     "return": ("请假返还", 1),
     "deduct": ("手动扣减", -1),
 }
+ATTENDANCE_STATUSES = {"present": "到课", "leave": "请假", "absent": "缺勤"}
 
 SEED_LEADS = [
     ("林可昕", 7, "139****1021", "大众点评", "新线索", "主持", "希望改善胆小、不敢表达的问题", ""),
@@ -284,7 +285,7 @@ def translate_postgres_sql(sql: str) -> str:
 
 
 def should_return_id(sql: str) -> bool:
-    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|hour_transactions)\b", sql, re.IGNORECASE))
+    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|hour_transactions|class_attendance)\b", sql, re.IGNORECASE))
 
 
 def postgres_schema(script: str) -> str:
@@ -495,6 +496,33 @@ def validate_password_change(payload: dict) -> dict:
     return {"current_password": current_password, "new_password": new_password}
 
 
+def validate_lesson_date(value: str) -> str:
+    try:
+        return datetime.strptime(str(value).strip(), "%Y-%m-%d").date().isoformat()
+    except ValueError as exc:
+        raise ValueError("点名日期格式无效") from exc
+
+
+def validate_attendance_payload(payload: dict) -> dict:
+    lesson_date = validate_lesson_date(payload.get("lesson_date", ""))
+    records = payload.get("records")
+    if not isinstance(records, list) or not records:
+        raise ValueError("请至少提交一名学员的点名状态")
+    parsed_records = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("点名记录格式错误")
+        status = str(record.get("status", "")).strip()
+        if status not in ATTENDANCE_STATUSES:
+            raise ValueError("点名状态无效")
+        parsed_records.append({
+            "student_id": integer_value(record, "student_id", "学员", 1),
+            "status": status,
+            "note": str(record.get("note", "")).strip(),
+        })
+    return {"lesson_date": lesson_date, "records": parsed_records}
+
+
 def initialize_database() -> None:
     if DATABASE_KIND == "sqlite":
         DATABASE.parent.mkdir(parents=True, exist_ok=True)
@@ -638,6 +666,24 @@ def initialize_database() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_hour_transactions_student ON hour_transactions(student_id);
             CREATE INDEX IF NOT EXISTS idx_hour_transactions_created ON hour_transactions(created_at);
+
+            CREATE TABLE IF NOT EXISTS class_attendance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
+                lesson_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                hours_delta REAL NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                recorded_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(class_id, student_id, lesson_date)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_class_attendance_class_date ON class_attendance(class_id, lesson_date);
+            CREATE INDEX IF NOT EXISTS idx_class_attendance_student ON class_attendance(student_id);
             """
         db.executescript(postgres_schema(schema_sql) if DATABASE_KIND == "postgres" else schema_sql)
         ensure_user_schema(db)
@@ -989,6 +1035,16 @@ def student_belongs_to_teacher(db: sqlite3.Connection, teacher_id: int, student_
     )
 
 
+def class_occurs_on_date(row: sqlite3.Row, lesson_date: str) -> bool:
+    date = datetime.strptime(lesson_date, "%Y-%m-%d").date()
+    return (
+        int(row["weekday"]) == date.weekday()
+        and str(row["start_date"]) <= lesson_date
+        and str(row["end_date"]) >= lesson_date
+        and row["status"] in {"招生中", "进行中"}
+    )
+
+
 def validate_student(payload: dict, partial: bool = False) -> dict:
     required = ("name", "age", "parent", "phone", "course")
     if not partial:
@@ -1247,6 +1303,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.get_leads(parse_qs(parsed.query))
             return
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "attendance":
+            if not self.require_permission("hours:read"):
+                return
+            self.get_attendance(parts[2], parse_qs(parsed.query))
+            return
         if parsed.path.startswith("/api/"):
             self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
             return
@@ -1313,6 +1375,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("roster:write"):
                 return
             self.enroll_student(parts[2])
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "attendance":
+            if not self.require_permission("hours:write"):
+                return
+            self.save_attendance(parts[2])
             return
         if len(parts) == 4 and parts[:2] == ["api", "leads"] and parts[3] == "contact":
             if not self.require_permission("leads:write"):
@@ -1640,6 +1707,133 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         self.send_json(hour_transaction_to_dict(row), HTTPStatus.CREATED)
+
+    def get_attendance(self, raw_class_id: str, query: dict) -> None:
+        try:
+            class_id = int(raw_class_id)
+            lesson_date = validate_lesson_date(query.get("date", [""])[0])
+            with connect() as db:
+                class_row = db.execute("SELECT * FROM classes WHERE id = ?", (class_id,)).fetchone()
+                if not class_row:
+                    raise ValueError("班级不存在")
+                allowed_teacher_ids = teacher_ids_for_user(db, self.current_user())
+                if allowed_teacher_ids is not None and class_row["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能查看该班点名")
+                    return
+                rows = db.execute(
+                    """
+                    SELECT a.*, s.name AS student_name
+                    FROM class_attendance a
+                    JOIN students s ON s.id = a.student_id
+                    WHERE a.class_id = ? AND a.lesson_date = ?
+                    ORDER BY s.name
+                    """,
+                    (class_id, lesson_date),
+                ).fetchall()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({
+            "class_id": class_id,
+            "lesson_date": lesson_date,
+            "records": [dict(row) | {"status_label": ATTENDANCE_STATUSES.get(row["status"], row["status"])} for row in rows],
+        })
+
+    def save_attendance(self, raw_class_id: str) -> None:
+        try:
+            class_id = int(raw_class_id)
+            payload = validate_attendance_payload(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            current_user = self.current_user()
+            with connect() as db:
+                class_row = db.execute(
+                    """
+                    SELECT c.*, p.name AS course_name, t.display_name AS teacher_name
+                    FROM classes c
+                    JOIN courses p ON p.id = c.course_id
+                    JOIN teachers t ON t.id = c.teacher_id
+                    WHERE c.id = ?
+                    """,
+                    (class_id,),
+                ).fetchone()
+                if not class_row:
+                    raise ValueError("班级不存在")
+                allowed_teacher_ids = teacher_ids_for_user(db, current_user)
+                if allowed_teacher_ids is not None and class_row["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能为该班点名")
+                    return
+                if not class_occurs_on_date(class_row, payload["lesson_date"]):
+                    raise ValueError("所选日期不是该班的上课日")
+                roster_ids = {
+                    row["student_id"]
+                    for row in db.execute("SELECT student_id FROM class_students WHERE class_id = ?", (class_id,)).fetchall()
+                }
+                submitted_ids = {record["student_id"] for record in payload["records"]}
+                if not submitted_ids.issubset(roster_ids):
+                    raise ValueError("点名记录包含非本班学员")
+                lesson_hours = round(float(class_row["duration"]) / 60, 2)
+                saved = []
+                for record in payload["records"]:
+                    student = db.execute("SELECT * FROM students WHERE id = ?", (record["student_id"],)).fetchone()
+                    if not student:
+                        raise ValueError("学员不存在")
+                    existing = db.execute(
+                        """
+                        SELECT * FROM class_attendance
+                        WHERE class_id = ? AND student_id = ? AND lesson_date = ?
+                        """,
+                        (class_id, record["student_id"], payload["lesson_date"]),
+                    ).fetchone()
+                    old_delta = float(existing["hours_delta"]) if existing else 0
+                    new_delta = -lesson_hours if record["status"] == "present" else 0
+                    diff = new_delta - old_delta
+                    balance_after = float(student["hours"]) + diff
+                    if balance_after < 0:
+                        raise ValueError(f"{student['name']} 当前仅剩 {format_number(student['hours'])} 课时，无法自动消课 {format_number(lesson_hours)} 课时")
+                    if diff:
+                        action = "consume" if diff < 0 else "return"
+                        label = ATTENDANCE_STATUSES[record["status"]]
+                        db.execute(
+                            "UPDATE students SET hours = ?, updated_at = ? WHERE id = ?",
+                            (balance_after, now, record["student_id"]),
+                        )
+                        db.execute(
+                            """
+                            INSERT INTO hour_transactions
+                                (student_id, teacher_id, action, amount, delta, balance_after, note, operator_id, occurred_at, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                record["student_id"], class_row["teacher_id"], action, abs(diff), diff, balance_after,
+                                f"{payload['lesson_date']} {class_row['name']} 点名：{label}",
+                                current_user["id"] if current_user else None, now, now,
+                            ),
+                        )
+                    if existing:
+                        db.execute(
+                            """
+                            UPDATE class_attendance
+                            SET status = ?, hours_delta = ?, note = ?, recorded_by = ?, recorded_at = ?, updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (record["status"], new_delta, record["note"], current_user["id"] if current_user else None, now, now, existing["id"]),
+                        )
+                        attendance_id = existing["id"]
+                    else:
+                        cursor = db.execute(
+                            """
+                            INSERT INTO class_attendance
+                                (class_id, student_id, teacher_id, lesson_date, status, hours_delta, note, recorded_by, recorded_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (class_id, record["student_id"], class_row["teacher_id"], payload["lesson_date"], record["status"], new_delta, record["note"], current_user["id"] if current_user else None, now, now),
+                        )
+                        attendance_id = cursor.lastrowid
+                    saved.append({"id": attendance_id, **record, "hours_delta": new_delta})
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"saved": True, "class_id": class_id, "lesson_date": payload["lesson_date"], "records": saved})
 
     def get_users(self) -> None:
         with connect() as db:
