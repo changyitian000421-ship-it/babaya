@@ -74,6 +74,9 @@
             <svg><use href="#icon-spark"></use></svg><span>招生跟进</span>
             <i>6</i>
           </button>
+          <button class="nav-item" data-page="trials">
+            <svg><use href="#icon-calendar"></use></svg><span>试听课</span>
+          </button>
           <button class="nav-item" data-page="hours">
             <svg><use href="#icon-clock"></use></svg><span>课时管理</span>
           </button>
@@ -239,6 +242,36 @@
           <div class="modal-footer">
             <button type="button" class="secondary-button" id="cancelLead">取消</button>
             <button type="submit" class="primary-button" id="saveLead">保存线索</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="trialBackdrop" hidden>
+      <div class="modal management-modal" role="dialog" aria-modal="true" aria-labelledby="trialTitle">
+        <div class="modal-header">
+          <div><small id="trialEyebrow">试听课管理</small><h2 id="trialTitle">预约试听课</h2></div>
+          <button class="icon-button" id="closeTrial" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
+        </div>
+        <form id="trialForm">
+          <input type="hidden" name="id" />
+          <input type="hidden" name="lead_id" />
+          <div class="form-grid">
+            <label><span>孩子姓名</span><input name="child_name" required placeholder="请输入孩子姓名" /></label>
+            <label><span>年龄</span><input name="age" required type="number" min="3" max="18" /></label>
+            <label><span>联系电话</span><input name="phone" required type="tel" placeholder="家长手机号" /></label>
+            <label><span>意向方向</span><input name="course_interest" required placeholder="主持、朗诵、演讲等" /></label>
+            <label><span>试听时间</span><input name="scheduled_at" required type="datetime-local" /></label>
+            <label><span>试听时长</span><input name="duration_minutes" required type="number" min="15" step="15" value="60" /></label>
+            <label><span>试听老师</span><select name="teacher_id" required></select></label>
+            <label><span>试听教室</span><select name="room_id" required></select></label>
+            <label><span>试听状态</span><select name="status"></select></label>
+            <label><span>试听结果</span><select name="result"></select></label>
+            <label class="full"><span>试听备注</span><textarea name="note" rows="3" placeholder="记录孩子表现、家长反馈、后续报名建议"></textarea></label>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="secondary-button" id="cancelTrial">取消</button>
+            <button type="submit" class="primary-button" id="saveTrial">保存试听课</button>
           </div>
         </form>
       </div>

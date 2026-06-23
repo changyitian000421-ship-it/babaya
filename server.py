@@ -106,6 +106,8 @@ SEED_CLASSES = [
 ]
 
 LEAD_STAGES = ("新线索", "已联系", "待试听", "待报名", "已报名", "无效")
+TRIAL_STATUSES = ("待试听", "已试听", "已转正", "已取消")
+TRIAL_RESULTS = ("未填写", "适合报名", "需再跟进", "暂不适合", "未到场")
 HOUR_ACTIONS = {
     "purchase": ("购买课时", 1),
     "consume": ("上课消课", -1),
@@ -285,7 +287,7 @@ def translate_postgres_sql(sql: str) -> str:
 
 
 def should_return_id(sql: str) -> bool:
-    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|hour_transactions|class_attendance)\b", sql, re.IGNORECASE))
+    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|trial_lessons|hour_transactions|class_attendance)\b", sql, re.IGNORECASE))
 
 
 def postgres_schema(script: str) -> str:
@@ -650,6 +652,29 @@ def initialize_database() -> None:
             CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
             CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);
 
+            CREATE TABLE IF NOT EXISTS trial_lessons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+                student_id INTEGER REFERENCES students(id) ON DELETE SET NULL,
+                child_name TEXT NOT NULL,
+                age INTEGER NOT NULL CHECK (age BETWEEN 3 AND 18),
+                phone TEXT NOT NULL,
+                course_interest TEXT NOT NULL DEFAULT '',
+                teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE RESTRICT,
+                room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE RESTRICT,
+                scheduled_at TEXT NOT NULL,
+                duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK (duration_minutes > 0),
+                status TEXT NOT NULL DEFAULT '待试听',
+                result TEXT NOT NULL DEFAULT '未填写',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_trial_lessons_lead ON trial_lessons(lead_id);
+            CREATE INDEX IF NOT EXISTS idx_trial_lessons_teacher ON trial_lessons(teacher_id);
+            CREATE INDEX IF NOT EXISTS idx_trial_lessons_scheduled ON trial_lessons(scheduled_at);
+
             CREATE TABLE IF NOT EXISTS hour_transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
@@ -956,6 +981,32 @@ def lead_to_dict(row: sqlite3.Row) -> dict:
     return dict(row)
 
 
+def trial_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "lead_id": row["lead_id"],
+        "student_id": row["student_id"],
+        "child_name": row["child_name"],
+        "age": row["age"],
+        "phone": row["phone"],
+        "course_interest": row["course_interest"],
+        "teacher_id": row["teacher_id"],
+        "teacher_name": row["teacher_name"] if "teacher_name" in row.keys() else "",
+        "teacher_color": row["teacher_color"] if "teacher_color" in row.keys() else "#ff9f1c",
+        "room_id": row["room_id"],
+        "room_name": row["room_name"] if "room_name" in row.keys() else "",
+        "room_code": row["room_code"] if "room_code" in row.keys() else "",
+        "scheduled_at": row["scheduled_at"],
+        "duration_minutes": row["duration_minutes"],
+        "status": row["status"],
+        "result": row["result"],
+        "note": row["note"],
+        "lead_stage": row["lead_stage"] if "lead_stage" in row.keys() else "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
 def validate_lead(payload: dict) -> dict:
     name = str(payload.get("name", "")).strip()
     age = integer_value(payload, "age", "年龄", 3)
@@ -978,6 +1029,56 @@ def validate_lead(payload: dict) -> dict:
         "tag": str(payload.get("tag", "")).strip(),
         "note": str(payload.get("note", "")).strip(),
         "next_follow_at": str(payload.get("next_follow_at", "")).strip(),
+    }
+
+
+def validate_scheduled_at(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("请选择试听时间")
+    for pattern in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(raw, pattern).isoformat(timespec="minutes")
+        except ValueError:
+            continue
+    raise ValueError("试听时间格式无效")
+
+
+def validate_trial(payload: dict) -> dict:
+    raw_lead_id = str(payload.get("lead_id", "")).strip()
+    lead_id = int(raw_lead_id) if raw_lead_id else None
+    child_name = str(payload.get("child_name", "")).strip()
+    phone = str(payload.get("phone", "")).strip()
+    course_interest = str(payload.get("course_interest", "")).strip() or "待确认"
+    status = str(payload.get("status", "待试听")).strip()
+    result = str(payload.get("result", "未填写")).strip() or "未填写"
+    if not child_name:
+        raise ValueError("请填写孩子姓名")
+    if not phone or len(phone) < 7:
+        raise ValueError("请填写有效联系电话")
+    if status not in TRIAL_STATUSES:
+        raise ValueError("试听状态无效")
+    if result not in TRIAL_RESULTS:
+        raise ValueError("试听结果无效")
+    age = integer_value(payload, "age", "年龄", 3)
+    if age > 18:
+        raise ValueError("年龄需要在 3-18 岁之间")
+    duration_minutes = integer_value(payload, "duration_minutes", "试听时长", 15)
+    if duration_minutes > 240:
+        raise ValueError("试听时长不能超过 240 分钟")
+    return {
+        "lead_id": lead_id,
+        "child_name": child_name,
+        "age": age,
+        "phone": phone,
+        "course_interest": course_interest,
+        "teacher_id": integer_value(payload, "teacher_id", "试听老师", 1),
+        "room_id": integer_value(payload, "room_id", "试听教室", 1),
+        "scheduled_at": validate_scheduled_at(payload.get("scheduled_at", "")),
+        "duration_minutes": duration_minutes,
+        "status": status,
+        "result": result,
+        "note": str(payload.get("note", "")).strip(),
     }
 
 
@@ -1303,6 +1404,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.get_leads(parse_qs(parsed.query))
             return
+        if parsed.path == "/api/trials":
+            if not self.require_permission("leads:read"):
+                return
+            self.get_trials()
+            return
         parts = parsed.path.strip("/").split("/")
         if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "attendance":
             if not self.require_permission("hours:read"):
@@ -1365,6 +1471,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.create_lead()
             return
+        if path == "/api/trials":
+            if not self.require_permission("leads:write"):
+                return
+            self.create_trial()
+            return
         if path == "/api/hour-transactions":
             if not self.require_permission("hours:write"):
                 return
@@ -1385,6 +1496,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("leads:write"):
                 return
             self.contact_lead(parts[2])
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "trials"] and parts[3] == "convert":
+            if not self.require_permission("students:write"):
+                return
+            self.convert_trial(parts[2])
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
 
@@ -1462,6 +1578,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.update_lead(item_id)
             return
+        if resource == "trials":
+            if not self.require_permission("leads:write"):
+                return
+            self.update_trial(item_id)
+            return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
 
     def update_student(self, student_id: int) -> None:
@@ -1536,6 +1657,181 @@ class AppHandler(BaseHTTPRequestHandler):
             self.delete_lead(item_id)
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
+
+    def trial_teacher_filter(self, db: sqlite3.Connection) -> list[int] | None:
+        current = self.current_user()
+        if current and current["role"] == "teacher":
+            return teacher_ids_for_user(db, current)
+        return None
+
+    def trial_row(self, db: sqlite3.Connection, trial_id: int) -> sqlite3.Row | None:
+        return db.execute(
+            """
+            SELECT tl.*, t.display_name AS teacher_name, t.color AS teacher_color,
+                r.name AS room_name, r.code AS room_code, l.stage AS lead_stage
+            FROM trial_lessons tl
+            JOIN teachers t ON t.id = tl.teacher_id
+            JOIN rooms r ON r.id = tl.room_id
+            LEFT JOIN leads l ON l.id = tl.lead_id
+            WHERE tl.id = ?
+            """,
+            (trial_id,),
+        ).fetchone()
+
+    def get_trials(self) -> None:
+        with connect() as db:
+            allowed_teacher_ids = self.trial_teacher_filter(db)
+            if allowed_teacher_ids == []:
+                self.send_json([])
+                return
+            where_sql = ""
+            params: tuple = ()
+            if allowed_teacher_ids is not None:
+                placeholders = ", ".join("?" for _ in allowed_teacher_ids)
+                where_sql = f"WHERE tl.teacher_id IN ({placeholders})"
+                params = tuple(allowed_teacher_ids)
+            rows = db.execute(
+                f"""
+                SELECT tl.*, t.display_name AS teacher_name, t.color AS teacher_color,
+                    r.name AS room_name, r.code AS room_code, l.stage AS lead_stage
+                FROM trial_lessons tl
+                JOIN teachers t ON t.id = tl.teacher_id
+                JOIN rooms r ON r.id = tl.room_id
+                LEFT JOIN leads l ON l.id = tl.lead_id
+                {where_sql}
+                ORDER BY tl.scheduled_at DESC, tl.id DESC
+                """,
+                params,
+            ).fetchall()
+        self.send_json([trial_to_dict(row) for row in rows])
+
+    def create_trial(self) -> None:
+        try:
+            data = validate_trial(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                allowed_teacher_ids = self.trial_teacher_filter(db)
+                if allowed_teacher_ids is not None and data["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能为该老师预约试听")
+                    return
+                if data["lead_id"] and not db.execute("SELECT id FROM leads WHERE id = ?", (data["lead_id"],)).fetchone():
+                    raise ValueError("关联线索不存在")
+                if not db.execute("SELECT id FROM teachers WHERE id = ? AND active = 1", (data["teacher_id"],)).fetchone():
+                    raise ValueError("试听老师不存在")
+                if not db.execute("SELECT id FROM rooms WHERE id = ? AND active = 1", (data["room_id"],)).fetchone():
+                    raise ValueError("试听教室不存在")
+                cursor = db.execute(
+                    """
+                    INSERT INTO trial_lessons
+                        (lead_id, child_name, age, phone, course_interest, teacher_id, room_id,
+                         scheduled_at, duration_minutes, status, result, note, created_at, updated_at)
+                    VALUES (:lead_id, :child_name, :age, :phone, :course_interest, :teacher_id, :room_id,
+                            :scheduled_at, :duration_minutes, :status, :result, :note, :created_at, :updated_at)
+                    """,
+                    {**data, "created_at": now, "updated_at": now},
+                )
+                if data["lead_id"]:
+                    db.execute(
+                        """
+                        UPDATE leads SET stage = '待试听', next_follow_at = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (data["scheduled_at"], now, data["lead_id"]),
+                    )
+                row = self.trial_row(db, cursor.lastrowid)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(trial_to_dict(row), HTTPStatus.CREATED)
+
+    def update_trial(self, trial_id: int) -> None:
+        try:
+            data = validate_trial(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                existing = db.execute("SELECT * FROM trial_lessons WHERE id = ?", (trial_id,)).fetchone()
+                if not existing:
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "试听课不存在")
+                    return
+                allowed_teacher_ids = self.trial_teacher_filter(db)
+                if allowed_teacher_ids is not None and existing["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能修改该试听课")
+                    return
+                if allowed_teacher_ids is not None and data["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能转给其他老师")
+                    return
+                if data["lead_id"] and not db.execute("SELECT id FROM leads WHERE id = ?", (data["lead_id"],)).fetchone():
+                    raise ValueError("关联线索不存在")
+                if not db.execute("SELECT id FROM teachers WHERE id = ? AND active = 1", (data["teacher_id"],)).fetchone():
+                    raise ValueError("试听老师不存在")
+                if not db.execute("SELECT id FROM rooms WHERE id = ? AND active = 1", (data["room_id"],)).fetchone():
+                    raise ValueError("试听教室不存在")
+                db.execute(
+                    """
+                    UPDATE trial_lessons SET
+                        lead_id=:lead_id, child_name=:child_name, age=:age, phone=:phone,
+                        course_interest=:course_interest, teacher_id=:teacher_id, room_id=:room_id,
+                        scheduled_at=:scheduled_at, duration_minutes=:duration_minutes,
+                        status=:status, result=:result, note=:note, updated_at=:updated_at
+                    WHERE id=:id
+                    """,
+                    {**data, "id": trial_id, "updated_at": now},
+                )
+                if data["lead_id"] and data["status"] == "待试听":
+                    db.execute(
+                        "UPDATE leads SET stage = '待试听', next_follow_at = ?, updated_at = ? WHERE id = ?",
+                        (data["scheduled_at"], now, data["lead_id"]),
+                    )
+                row = self.trial_row(db, trial_id)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(trial_to_dict(row))
+
+    def convert_trial(self, raw_trial_id: str) -> None:
+        try:
+            trial_id = int(raw_trial_id)
+        except ValueError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "编号无效")
+            return
+        now = datetime.now().isoformat(timespec="seconds")
+        with connect() as db:
+            trial = db.execute("SELECT * FROM trial_lessons WHERE id = ?", (trial_id,)).fetchone()
+            if not trial:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "试听课不存在")
+                return
+            if trial["student_id"]:
+                student = db.execute("SELECT * FROM students WHERE id = ?", (trial["student_id"],)).fetchone()
+                self.send_json({"converted": True, "student": student_to_dict(student), "trial": trial_to_dict(self.trial_row(db, trial_id))})
+                return
+            cursor = db.execute(
+                """
+                INSERT INTO students
+                    (name, age, parent, phone, course, hours, status, color, note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 0, '待分班', ?, ?, ?, ?)
+                """,
+                (
+                    trial["child_name"], trial["age"], "试听家长", trial["phone"],
+                    trial["course_interest"] or "待确认", COLORS[trial_id % len(COLORS)],
+                    f"由试听课转入。试听结果：{trial['result']}。{trial['note']}".strip(),
+                    now, now,
+                ),
+            )
+            student = db.execute("SELECT * FROM students WHERE id = ?", (cursor.lastrowid,)).fetchone()
+            db.execute(
+                """
+                UPDATE trial_lessons SET status = '已转正', student_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (cursor.lastrowid, now, trial_id),
+            )
+            if trial["lead_id"]:
+                db.execute(
+                    "UPDATE leads SET stage = '已报名', updated_at = ? WHERE id = ?",
+                    (now, trial["lead_id"]),
+                )
+            trial_row = self.trial_row(db, trial_id)
+        self.send_json({"converted": True, "student": student_to_dict(student), "trial": trial_to_dict(trial_row)})
 
     def get_leads(self, query: dict) -> None:
         stage = query.get("stage", [""])[0].strip()

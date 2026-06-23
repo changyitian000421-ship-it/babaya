@@ -287,6 +287,19 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
 .lead-empty { padding: 28px 10px; border: 1px dashed var(--line); border-radius: 13px; color: var(--muted); background: rgba(255,255,255,.55); font-size: 10px; text-align: center; }
 .phone-button { width: 27px; height: 27px; display: grid; place-items: center; border: 0; border-radius: 8px; color: var(--accent); background: var(--accent-soft); cursor: pointer; }.phone-button svg { width: 12px; }
 
+.trial-summary { margin-bottom: 18px; }
+.trial-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.trial-card { position: relative; overflow: hidden; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--white); }
+.trial-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--trial-color); }
+.trial-card-head { display: flex; justify-content: space-between; gap: 12px; }
+.trial-card h3 { margin: 4px 0; font-size: 15px; }.trial-card p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.trial-date { color: var(--accent-dark); font-size: 10px; font-weight: 800; }
+.trial-details { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin: 16px 0; }
+.trial-details span { padding: 10px; border-radius: 11px; color: var(--muted); background: #faf8f4; font-size: 9px; }
+.trial-details strong { display: block; margin-top: 3px; color: var(--ink); font-size: 11px; }
+.trial-note { min-height: 34px; padding-top: 12px; border-top: 1px solid #f0ece7; }
+.trial-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+
 .hours-summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 17px; }
 .summary-card { padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--white); }
 .summary-card span { color: var(--muted); font-size: 10px; }.summary-card strong { display: block; margin-top: 7px; font-size: 23px; }
@@ -445,7 +458,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .dashboard-grid { grid-template-columns: 1fr; }
   .global-search { width: 220px; }
-  .course-grid, .class-grid, .resource-grid { grid-template-columns: 1fr; }
+  .course-grid, .class-grid, .resource-grid, .trial-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 780px) {
   .sidebar { transform: translateX(-100%); transition: .25s ease; box-shadow: var(--shadow); }

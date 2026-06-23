@@ -4,6 +4,7 @@ let students = [];
 let catalog = { courses: [], classes: [], teachers: [], rooms: [] };
 let users = [];
 let leads = [];
+let trials = [];
 let hourTransactions = [];
 let catalogView = "courses";
 let activeWeekStart = startOfWeek(new Date());
@@ -22,6 +23,8 @@ const dashboardClasses = [
 ];
 
 const leadStages = ["新线索", "已联系", "待试听", "待报名", "已报名"];
+const trialStatuses = ["待试听", "已试听", "已转正", "已取消"];
+const trialResults = ["未填写", "适合报名", "需再跟进", "暂不适合", "未到场"];
 
 const pageMeta = {
   dashboard: ["总览", "下午好，林老师"],
@@ -30,6 +33,7 @@ const pageMeta = {
   schedule: ["教务管理", "班级课表"],
   attendance: ["教学管理", "上课点名"],
   leads: ["招生中心", "招生跟进"],
+  trials: ["招生中心", "试听课管理"],
   hours: ["财务与课消", "课时管理"],
   teaching: ["教学管理", "教学中心"],
   account: ["个人中心", "账号设置"],
@@ -37,10 +41,10 @@ const pageMeta = {
 };
 
 const rolePages = {
-  owner: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "hours", "teaching", "account", "settings"],
-  academic: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "hours", "teaching", "account"],
-  teacher: ["dashboard", "schedule", "attendance", "hours", "leads", "teaching", "students", "catalog", "account"],
-  sales: ["dashboard", "leads", "students", "account"],
+  owner: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "hours", "teaching", "account", "settings"],
+  academic: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "hours", "teaching", "account"],
+  teacher: ["dashboard", "schedule", "attendance", "trials", "hours", "leads", "teaching", "students", "catalog", "account"],
+  sales: ["dashboard", "leads", "trials", "students", "account"],
   finance: ["dashboard", "hours", "leads", "students", "account"],
 };
 
@@ -133,6 +137,10 @@ async function loadUsers() {
 
 async function loadLeads() {
   leads = await api("/api/leads");
+}
+
+async function loadTrials() {
+  trials = await api("/api/trials");
 }
 
 async function loadHourTransactions() {
@@ -673,6 +681,7 @@ function leadCard(lead) {
       <div class="lead-actions">
         ${can("leads:write") ? `<button class="phone-button contact-lead" data-id="${lead.id}" title="记录电话跟进">${icon("phone")}</button>
         <button class="table-action edit-lead" data-id="${lead.id}" title="编辑线索">${icon("edit")}</button>
+        ${lead.stage === "待试听" ? `<button class="text-button schedule-trial" data-id="${lead.id}">预约试听</button>` : ""}
         ${nextStage ? `<button class="text-button advance-lead" data-id="${lead.id}" data-stage="${nextStage}">推进</button>` : ""}
         <button class="table-action danger invalid-lead" data-id="${lead.id}" title="标记无效">${icon("trash")}</button>` : `<span class="readonly-note">只读</span>`}
       </div>
@@ -761,6 +770,149 @@ async function updateLeadStage(leadId, stage) {
     });
     showToast(`线索 ${lead.name} 已更新为「${stage}」`);
     await renderPage("leads");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function renderTrials() {
+  const upcoming = trials.filter(item => item.status === "待试听");
+  const completed = trials.filter(item => item.status === "已试听");
+  const converted = trials.filter(item => item.status === "已转正");
+  pageContent.innerHTML = `
+    <div class="hours-summary trial-summary">
+      <div class="summary-card"><span>待试听</span><strong>${upcoming.length}</strong><span>需要准时提醒老师和家长</span></div>
+      <div class="summary-card"><span>已试听待转化</span><strong>${completed.length}</strong><span>记录结果后继续报名跟进</span></div>
+      <div class="summary-card"><span>已转正式</span><strong>${converted.length}</strong><span class="positive">已进入学员档案</span></div>
+    </div>
+    <div class="section-toolbar">
+      <div><h2>试听课管理</h2><p>从待试听线索预约，试听后记录结果，并可一键转为正式学员</p></div>
+      <div class="toolbar-actions">${can("leads:write") ? `<button class="primary-button add-trial">${icon("plus")} 新增试听</button>` : ""}</div>
+    </div>
+    <div class="trial-grid">
+      ${trials.length ? trials.map(trialCard).join("") : `<div class="empty-state">还没有试听课。可以从“招生跟进”的待试听线索直接预约。</div>`}
+    </div>`;
+}
+
+function trialCard(trial) {
+  const canEdit = can("leads:write");
+  const canConvert = can("students:write") && trial.status !== "已转正" && trial.status !== "已取消";
+  return `<article class="trial-card" style="--trial-color:${escapeHtml(trial.teacher_color || "#ff9f1c")}">
+    <div class="trial-card-head">
+      <div>
+        <span class="trial-date">${formatShortTime(trial.scheduled_at)}</span>
+        <h3>${escapeHtml(trial.child_name)} · ${trial.age}岁</h3>
+        <p>${escapeHtml(trial.course_interest || "待确认方向")} · ${trial.duration_minutes} 分钟</p>
+      </div>
+      <span class="tag" style="--tag-color:${trialStatusColor(trial.status)}">${escapeHtml(trial.status)}</span>
+    </div>
+    <div class="trial-details">
+      <span>老师<strong>${escapeHtml(trial.teacher_name || "未分配")}</strong></span>
+      <span>教室<strong>${escapeHtml(trial.room_name || "")} ${escapeHtml(trial.room_code || "")}</strong></span>
+      <span>电话<strong>${escapeHtml(trial.phone)}</strong></span>
+      <span>结果<strong>${escapeHtml(trial.result || "未填写")}</strong></span>
+    </div>
+    <p class="trial-note">${escapeHtml(trial.note || "暂无试听备注")}</p>
+    <div class="trial-actions">
+      ${canEdit ? `<button class="secondary-button edit-trial" data-id="${trial.id}">${icon("edit")} 编辑结果</button>` : ""}
+      ${canConvert ? `<button class="primary-button convert-trial" data-id="${trial.id}">${icon("check")} 转正式学员</button>` : ""}
+    </div>
+  </article>`;
+}
+
+function trialStatusColor(status) {
+  if (status === "已转正") return "#4f896f";
+  if (status === "已试听") return "#715b87";
+  if (status === "已取消") return "#8a827b";
+  return "#ff9f1c";
+}
+
+function defaultTrialDateTime() {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+  date.setHours(10, 0, 0, 0);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 16);
+}
+
+function normalizeDateTimeLocal(value) {
+  return value ? String(value).replace(" ", "T").slice(0, 16) : defaultTrialDateTime();
+}
+
+function openTrialModal(trial = null, lead = null) {
+  const form = document.querySelector("#trialForm");
+  form.reset();
+  form.elements.id.value = trial?.id || "";
+  form.elements.lead_id.value = trial?.lead_id || lead?.id || "";
+  document.querySelector("#trialTitle").textContent = trial ? "编辑试听课" : "预约试听课";
+  document.querySelector("#trialEyebrow").textContent = lead ? `来自线索：${lead.name}` : "试听课管理";
+  document.querySelector("#saveTrial").textContent = trial ? "保存修改" : "保存试听课";
+  form.elements.teacher_id.innerHTML = catalog.teachers.map(teacher => `<option value="${teacher.id}">${escapeHtml(teacher.display_name)} · ${escapeHtml(teacher.specialty || "授课教师")}</option>`).join("");
+  form.elements.room_id.innerHTML = catalog.rooms.map(room => `<option value="${room.id}">${escapeHtml(room.name)} ${escapeHtml(room.code)}（${room.capacity}人）</option>`).join("");
+  form.elements.status.innerHTML = trialStatuses.map(status => `<option>${status}</option>`).join("");
+  form.elements.result.innerHTML = trialResults.map(result => `<option>${result}</option>`).join("");
+  form.elements.child_name.value = trial?.child_name || lead?.name || "";
+  form.elements.age.value = trial?.age || lead?.age || "";
+  form.elements.phone.value = trial?.phone || lead?.phone || "";
+  form.elements.course_interest.value = trial?.course_interest || lead?.tag || "";
+  form.elements.scheduled_at.value = normalizeDateTimeLocal(trial?.scheduled_at);
+  form.elements.duration_minutes.value = trial?.duration_minutes || 60;
+  form.elements.teacher_id.value = trial?.teacher_id || catalog.teachers[0]?.id || "";
+  form.elements.room_id.value = trial?.room_id || catalog.rooms[0]?.id || "";
+  form.elements.status.value = trial?.status || "待试听";
+  form.elements.result.value = trial?.result || "未填写";
+  form.elements.note.value = trial?.note || lead?.note || "";
+  document.querySelector("#trialBackdrop").hidden = false;
+  setTimeout(() => form.elements.child_name.focus(), 30);
+}
+
+function closeTrialModal() {
+  document.querySelector("#trialBackdrop").hidden = true;
+}
+
+async function saveTrial(event) {
+  event.preventDefault();
+  if (!can("leads:write")) {
+    showToast("当前角色不能修改试听课");
+    return;
+  }
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const trialId = data.id;
+  delete data.id;
+  data.age = Number(data.age);
+  data.teacher_id = Number(data.teacher_id);
+  data.room_id = Number(data.room_id);
+  data.duration_minutes = Number(data.duration_minutes);
+  const button = document.querySelector("#saveTrial");
+  button.classList.add("button-loading");
+  button.textContent = "保存中...";
+  try {
+    await api(trialId ? `/api/trials/${trialId}` : "/api/trials", {
+      method: trialId ? "PUT" : "POST",
+      body: JSON.stringify(data),
+    });
+    closeTrialModal();
+    showToast(`试听课已${trialId ? "更新" : "预约"}`);
+    await Promise.all([loadTrials(), loadLeads(), loadCatalog()]);
+    if (activePage === "leads") renderLeads();
+    else renderTrials();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.classList.remove("button-loading");
+    button.textContent = trialId ? "保存修改" : "保存试听课";
+  }
+}
+
+async function convertTrial(trialId) {
+  const trial = trials.find(item => item.id === trialId);
+  if (!trial || !window.confirm(`确定将「${trial.child_name}」转为正式学员吗？`)) return;
+  try {
+    await api(`/api/trials/${trialId}/convert`, { method: "POST" });
+    showToast(`${trial.child_name} 已转为正式学员`);
+    await Promise.all([loadTrials(), loadLeads(), loadStudents(), loadCatalog()]);
+    renderTrials();
   } catch (error) {
     showToast(error.message);
   }
@@ -1053,6 +1205,10 @@ async function renderPage(page, query = "") {
     if (page === "leads") {
       await loadLeads();
       renderLeads();
+    }
+    if (page === "trials") {
+      await Promise.all([loadTrials(), loadLeads(), loadCatalog()]);
+      renderTrials();
     }
     if (page === "hours") {
       await Promise.all([loadStudents(), loadCatalog(), loadHourTransactions()]);
@@ -1454,6 +1610,29 @@ document.addEventListener("click", async event => {
   if (event.target.closest(".render-invalid-leads")) renderInvalidLeads();
   if (event.target.closest(".back-to-leads")) renderLeads();
 
+  const scheduleTrial = event.target.closest(".schedule-trial");
+  if (scheduleTrial) {
+    const lead = leads.find(item => item.id === Number(scheduleTrial.dataset.id));
+    if (lead) {
+      if (!catalog.teachers.length || !catalog.rooms.length) await loadCatalog();
+      openTrialModal(null, lead);
+    }
+  }
+
+  if (event.target.closest(".add-trial") && can("leads:write")) {
+    if (!catalog.teachers.length || !catalog.rooms.length) await loadCatalog();
+    openTrialModal();
+  }
+
+  const editTrial = event.target.closest(".edit-trial");
+  if (editTrial) {
+    const trial = trials.find(item => item.id === Number(editTrial.dataset.id));
+    if (trial) openTrialModal(trial);
+  }
+
+  const convertTrialButton = event.target.closest(".convert-trial");
+  if (convertTrialButton) convertTrial(Number(convertTrialButton.dataset.id));
+
   const enroll = event.target.closest(".enroll-student");
   if (enroll) enrollStudent(Number(enroll.dataset.id));
 
@@ -1505,6 +1684,11 @@ document.querySelector("#closeLead").addEventListener("click", closeLeadModal);
 document.querySelector("#cancelLead").addEventListener("click", closeLeadModal);
 document.querySelector("#leadBackdrop").addEventListener("click", event => {
   if (event.target.id === "leadBackdrop") closeLeadModal();
+});
+document.querySelector("#closeTrial").addEventListener("click", closeTrialModal);
+document.querySelector("#cancelTrial").addEventListener("click", closeTrialModal);
+document.querySelector("#trialBackdrop").addEventListener("click", event => {
+  if (event.target.id === "trialBackdrop") closeTrialModal();
 });
 document.querySelector("#loginForm").addEventListener("submit", handleLogin);
 document.querySelector("#logoutButton").addEventListener("click", logout);
@@ -1580,6 +1764,7 @@ document.querySelector("#managementForm").addEventListener("submit", async event
 });
 
 document.querySelector("#leadForm").addEventListener("submit", saveLead);
+document.querySelector("#trialForm").addEventListener("submit", saveTrial);
 
 document.addEventListener("submit", async event => {
   if (event.target.id === "attendanceForm") {
