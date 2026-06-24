@@ -6,6 +6,7 @@ let users = [];
 let leads = [];
 let trials = [];
 let hourTransactions = [];
+let payments = [];
 let catalogView = "courses";
 let activeWeekStart = startOfWeek(new Date());
 let activeScheduleDay = todayScheduleIndex();
@@ -34,6 +35,7 @@ const pageMeta = {
   attendance: ["教学管理", "上课点名"],
   leads: ["招生中心", "招生跟进"],
   trials: ["招生中心", "试听课管理"],
+  payments: ["财务与课消", "缴费续费"],
   hours: ["财务与课消", "课时管理"],
   teaching: ["教学管理", "教学中心"],
   account: ["个人中心", "账号设置"],
@@ -41,11 +43,11 @@ const pageMeta = {
 };
 
 const rolePages = {
-  owner: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "hours", "teaching", "account", "settings"],
-  academic: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "hours", "teaching", "account"],
+  owner: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "payments", "hours", "teaching", "account", "settings"],
+  academic: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "payments", "hours", "teaching", "account"],
   teacher: ["dashboard", "schedule", "attendance", "trials", "hours", "leads", "teaching", "students", "catalog", "account"],
   sales: ["dashboard", "leads", "trials", "students", "account"],
-  finance: ["dashboard", "hours", "leads", "students", "account"],
+  finance: ["dashboard", "payments", "hours", "leads", "students", "account"],
 };
 
 const roleOptions = [
@@ -145,6 +147,10 @@ async function loadTrials() {
 
 async function loadHourTransactions() {
   hourTransactions = await api("/api/hour-transactions");
+}
+
+async function loadPayments() {
+  payments = await api("/api/payments");
 }
 
 function showLogin(message = "") {
@@ -918,6 +924,52 @@ async function convertTrial(trialId) {
   }
 }
 
+function renderPayments() {
+  const monthKey = toDateInputValue(new Date()).slice(0, 7);
+  const paidThisMonth = payments
+    .filter(item => String(item.paid_at || item.created_at).startsWith(monthKey) && item.payment_type !== "退费记录")
+    .reduce((sum, item) => sum + Number(item.amount_paid || 0), 0);
+  const addedHoursThisMonth = payments
+    .filter(item => String(item.paid_at || item.created_at).startsWith(monthKey))
+    .reduce((sum, item) => sum + Number(item.hours_added || 0), 0);
+  const renewalCount = payments.filter(item => item.payment_type === "续费").length;
+  const canManagePayments = can("hours:write");
+  const studentOptions = students
+    .map(student => `<option value="${student.id}">${escapeHtml(student.name)} · ${escapeHtml(student.course)} · 剩余 ${formatHours(student.hours)} 课时</option>`)
+    .join("");
+  pageContent.innerHTML = `
+    <div class="hours-summary">
+      <div class="summary-card"><span>本月收款</span><strong>${formatMoney(paidThisMonth)}</strong><span>不含退费记录</span></div>
+      <div class="summary-card"><span>本月新增课时</span><strong>${formatHours(addedHoursThisMonth)}</strong><span>保存后自动进入学员余额</span></div>
+      <div class="summary-card"><span>续费记录</span><strong>${renewalCount}</strong><span>累计续费笔数</span></div>
+    </div>
+    <div class="section-toolbar"><div><h2>缴费与续费记录</h2><p>记录新报名、续费、补缴和退费；续费会自动增加课时并写入课时流水</p></div></div>
+    ${canManagePayments ? `<section class="panel hours-form-panel">
+      <div class="panel-header"><div class="panel-title"><h2>新增缴费 / 续费</h2><p>录入金额与新增课时，系统会自动更新学员剩余课时</p></div></div>
+      <form id="paymentForm" class="hours-form payment-form">
+        <label><span>学员</span><select name="student_id" required ${studentOptions ? "" : "disabled"}>${studentOptions || `<option>暂无学员</option>`}</select></label>
+        <label><span>类型</span><select name="payment_type"><option>续费</option><option>新报名</option><option>补缴</option><option>退费记录</option></select></label>
+        <label><span>缴费金额</span><input name="amount_paid" required type="number" min="0" step="1" placeholder="例如：4680" /></label>
+        <label><span>新增课时</span><input name="hours_added" required type="number" min="0" step="0.5" placeholder="例如：24" /></label>
+        <label><span>付款方式</span><select name="payment_method"><option>微信</option><option>支付宝</option><option>现金</option><option>银行卡</option><option>其他</option></select></label>
+        <label><span>缴费时间</span><input name="paid_at" type="datetime-local" value="${defaultDateTimeLocal()}" /></label>
+        <label class="full"><span>备注</span><input name="note" placeholder="例如：暑期班续费 24 课时 / 老带新优惠后金额" /></label>
+        <div class="hours-form-actions"><button type="submit" class="primary-button" id="savePayment" ${studentOptions ? "" : "disabled"}>保存缴费记录</button></div>
+      </form>
+    </section>` : `<div class="roster-readonly">当前角色只能查看缴费记录，不能新增收款。</div>`}
+    <div class="table-card"><table class="data-table"><thead><tr><th>缴费时间</th><th>学员</th><th>类型</th><th>金额</th><th>新增课时</th><th>方式</th><th>操作人 / 备注</th></tr></thead>
+      <tbody>${payments.length ? payments.map(item => `<tr>
+        <td>${formatShortTime(item.paid_at || item.created_at)}</td>
+        <td><strong>${escapeHtml(item.student_name)}</strong><br><small>${escapeHtml(item.course_name || "未分配课程")} · 余额 ${formatHours(item.balance_after)} 课时</small></td>
+        <td><span class="tag" style="--tag-color:${item.payment_type === "退费记录" ? "#8a827b" : "#ff9f1c"}">${escapeHtml(item.payment_type)}</span></td>
+        <td><strong>${formatMoney(item.amount_paid)}</strong></td>
+        <td><strong class="${Number(item.hours_added || 0) ? "positive" : ""}">+${formatHours(item.hours_added)}</strong></td>
+        <td>${escapeHtml(item.payment_method)}</td>
+        <td>${escapeHtml(item.operator_name || "系统")}<br><small>${escapeHtml(item.note || "无备注")}</small></td>
+      </tr>`).join("") : `<tr><td colspan="7"><div class="empty-state">还没有缴费记录，先新增一笔续费。</div></td></tr>`}</tbody>
+    </table></div>`;
+}
+
 function renderHours() {
   const groups = visibleHourGroups();
   const canSeeOverall = canSeeOverallHours();
@@ -1210,6 +1262,10 @@ async function renderPage(page, query = "") {
       await Promise.all([loadTrials(), loadLeads(), loadCatalog()]);
       renderTrials();
     }
+    if (page === "payments") {
+      await Promise.all([loadStudents(), loadPayments()]);
+      renderPayments();
+    }
     if (page === "hours") {
       await Promise.all([loadStudents(), loadCatalog(), loadHourTransactions()]);
       renderHours();
@@ -1227,6 +1283,10 @@ function escapeHtml(value) {
 
 function formatHours(value) {
   return Number(value || 0).toLocaleString("zh-CN", { maximumFractionDigits: 1 });
+}
+
+function formatMoney(value) {
+  return Number(value || 0).toLocaleString("zh-CN", { style: "currency", currency: "CNY", maximumFractionDigits: 0 });
 }
 
 function formatToday() {
@@ -1879,6 +1939,36 @@ document.addEventListener("submit", async event => {
     } finally {
       button.classList.remove("button-loading");
       button.textContent = "保存课时流水";
+    }
+    return;
+  }
+  if (event.target.id === "paymentForm") {
+    event.preventDefault();
+    if (!can("hours:write")) {
+      showToast("当前角色不能新增缴费记录");
+      return;
+    }
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    data.student_id = Number(data.student_id);
+    data.amount_paid = Number(data.amount_paid);
+    data.hours_added = Number(data.hours_added);
+    const button = document.querySelector("#savePayment");
+    button.classList.add("button-loading");
+    button.textContent = "保存中...";
+    try {
+      await api("/api/payments", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+      showToast("缴费记录已保存，课时已自动增加");
+      await Promise.all([loadStudents(), loadPayments(), loadHourTransactions()]);
+      renderPayments();
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.classList.remove("button-loading");
+      button.textContent = "保存缴费记录";
     }
     return;
   }

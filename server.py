@@ -287,7 +287,7 @@ def translate_postgres_sql(sql: str) -> str:
 
 
 def should_return_id(sql: str) -> bool:
-    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|trial_lessons|hour_transactions|class_attendance)\b", sql, re.IGNORECASE))
+    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|trial_lessons|payments|hour_transactions|class_attendance)\b", sql, re.IGNORECASE))
 
 
 def postgres_schema(script: str) -> str:
@@ -675,6 +675,22 @@ def initialize_database() -> None:
             CREATE INDEX IF NOT EXISTS idx_trial_lessons_teacher ON trial_lessons(teacher_id);
             CREATE INDEX IF NOT EXISTS idx_trial_lessons_scheduled ON trial_lessons(scheduled_at);
 
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                payment_type TEXT NOT NULL DEFAULT '续费',
+                amount_paid REAL NOT NULL CHECK (amount_paid >= 0),
+                hours_added REAL NOT NULL CHECK (hours_added >= 0),
+                payment_method TEXT NOT NULL DEFAULT '微信',
+                paid_at TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                operator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_payments_student ON payments(student_id);
+            CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON payments(paid_at);
+
             CREATE TABLE IF NOT EXISTS hour_transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
@@ -1007,6 +1023,16 @@ def trial_to_dict(row: sqlite3.Row) -> dict:
     }
 
 
+def payment_to_dict(row: sqlite3.Row) -> dict:
+    item = dict(row)
+    for key in ("amount_paid", "hours_added", "balance_after"):
+        if key in item and item[key] is not None:
+            item[key] = float(item[key])
+            if item[key].is_integer():
+                item[key] = int(item[key])
+    return item
+
+
 def validate_lead(payload: dict) -> dict:
     name = str(payload.get("name", "")).strip()
     age = integer_value(payload, "age", "年龄", 3)
@@ -1093,6 +1119,31 @@ def validate_hour_transaction(payload: dict) -> dict:
         "amount": number_value(payload, "amount", "课时数", 0.5),
         "note": str(payload.get("note", "")).strip(),
         "occurred_at": str(payload.get("occurred_at", "")).strip() or datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def validate_payment(payload: dict) -> dict:
+    payment_type = str(payload.get("payment_type", "续费")).strip()
+    payment_method = str(payload.get("payment_method", "微信")).strip()
+    paid_at = str(payload.get("paid_at", "")).strip() or datetime.now().isoformat(timespec="seconds")
+    if payment_type not in {"新报名", "续费", "补缴", "退费记录"}:
+        raise ValueError("缴费类型无效")
+    if payment_method not in {"微信", "支付宝", "现金", "银行卡", "其他"}:
+        raise ValueError("付款方式无效")
+    amount_paid = number_value(payload, "amount_paid", "缴费金额", 0)
+    hours_added = number_value(payload, "hours_added", "新增课时", 0)
+    if payment_type != "退费记录" and amount_paid <= 0:
+        raise ValueError("缴费金额必须大于 0")
+    if payment_type != "退费记录" and hours_added <= 0:
+        raise ValueError("新增课时必须大于 0")
+    return {
+        "student_id": integer_value(payload, "student_id", "学员", 1),
+        "payment_type": payment_type,
+        "amount_paid": amount_paid,
+        "hours_added": hours_added,
+        "payment_method": payment_method,
+        "paid_at": paid_at,
+        "note": str(payload.get("note", "")).strip(),
     }
 
 
@@ -1399,6 +1450,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.get_hour_transactions()
             return
+        if parsed.path == "/api/payments":
+            if not self.require_permission("hours:read"):
+                return
+            self.get_payments()
+            return
         if parsed.path == "/api/leads":
             if not self.require_permission("leads:read"):
                 return
@@ -1480,6 +1536,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("hours:write"):
                 return
             self.create_hour_transaction()
+            return
+        if path == "/api/payments":
+            if not self.require_permission("hours:write"):
+                return
+            self.create_payment()
             return
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "students":
@@ -2003,6 +2064,78 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         self.send_json(hour_transaction_to_dict(row), HTTPStatus.CREATED)
+
+    def get_payments(self) -> None:
+        with connect() as db:
+            rows = db.execute(
+                """
+                SELECT p.*, s.name AS student_name, s.course AS course_name,
+                    s.hours AS balance_after, u.name AS operator_name
+                FROM payments p
+                JOIN students s ON s.id = p.student_id
+                LEFT JOIN users u ON u.id = p.operator_id
+                ORDER BY p.paid_at DESC, p.id DESC
+                LIMIT 300
+                """
+            ).fetchall()
+        self.send_json([payment_to_dict(row) for row in rows])
+
+    def create_payment(self) -> None:
+        try:
+            data = validate_payment(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            current_user = self.current_user()
+            with connect() as db:
+                student = db.execute("SELECT * FROM students WHERE id = ?", (data["student_id"],)).fetchone()
+                if not student:
+                    raise ValueError("学员不存在")
+                balance_after = float(student["hours"]) + float(data["hours_added"])
+                cursor = db.execute(
+                    """
+                    INSERT INTO payments
+                        (student_id, payment_type, amount_paid, hours_added, payment_method,
+                         paid_at, note, operator_id, created_at)
+                    VALUES (:student_id, :payment_type, :amount_paid, :hours_added, :payment_method,
+                            :paid_at, :note, :operator_id, :created_at)
+                    """,
+                    {
+                        **data,
+                        "operator_id": current_user["id"] if current_user else None,
+                        "created_at": now,
+                    },
+                )
+                if data["hours_added"] > 0:
+                    db.execute(
+                        "UPDATE students SET hours = ?, status = '在读', updated_at = ? WHERE id = ?",
+                        (balance_after, now, data["student_id"]),
+                    )
+                    db.execute(
+                        """
+                        INSERT INTO hour_transactions
+                            (student_id, teacher_id, action, amount, delta, balance_after, note, operator_id, occurred_at, created_at)
+                        VALUES (?, NULL, 'purchase', ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            data["student_id"], data["hours_added"], data["hours_added"], balance_after,
+                            f"{data['payment_type']}：{format_number(data['amount_paid'])} 元，{data['payment_method']}。{data['note']}".strip(),
+                            current_user["id"] if current_user else None, data["paid_at"], now,
+                        ),
+                    )
+                row = db.execute(
+                    """
+                    SELECT p.*, s.name AS student_name, s.course AS course_name,
+                        s.hours AS balance_after, u.name AS operator_name
+                    FROM payments p
+                    JOIN students s ON s.id = p.student_id
+                    LEFT JOIN users u ON u.id = p.operator_id
+                    WHERE p.id = ?
+                    """,
+                    (cursor.lastrowid,),
+                ).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(payment_to_dict(row), HTTPStatus.CREATED)
 
     def get_attendance(self, raw_class_id: str, query: dict) -> None:
         try:
