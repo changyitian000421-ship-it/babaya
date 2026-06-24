@@ -50,15 +50,16 @@ ROLE_PERMISSIONS = {
     "owner": {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
         "roster:write", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read",
-        "settings:read", "settings:write",
+        "payments:read", "payments:write", "settings:read", "settings:write",
     },
     "academic": {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
         "roster:write", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read",
+        "payments:read", "payments:write",
     },
     "teacher": {"dashboard:read", "students:read", "catalog:read", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read"},
     "sales": {"dashboard:read", "students:read", "students:write", "leads:read", "leads:write"},
-    "finance": {"dashboard:read", "students:read", "leads:read", "leads:write", "hours:read", "hours:write"},
+    "finance": {"dashboard:read", "students:read", "leads:read", "leads:write", "hours:read", "hours:write", "payments:read", "payments:write"},
 }
 
 SEED_USERS = [
@@ -1451,7 +1452,7 @@ class AppHandler(BaseHTTPRequestHandler):
             self.get_hour_transactions()
             return
         if parsed.path == "/api/payments":
-            if not self.require_permission("hours:read"):
+            if not self.require_permission("payments:read"):
                 return
             self.get_payments()
             return
@@ -1538,7 +1539,7 @@ class AppHandler(BaseHTTPRequestHandler):
             self.create_hour_transaction()
             return
         if path == "/api/payments":
-            if not self.require_permission("hours:write"):
+            if not self.require_permission("payments:write"):
                 return
             self.create_payment()
             return

@@ -35,7 +35,7 @@ const pageMeta = {
   attendance: ["教学管理", "上课点名"],
   leads: ["招生中心", "招生跟进"],
   trials: ["招生中心", "试听课管理"],
-  payments: ["财务与课消", "缴费续费"],
+  payments: ["财务管理", "缴费续费"],
   hours: ["财务与课消", "课时管理"],
   teaching: ["教学管理", "教学中心"],
   account: ["个人中心", "账号设置"],
@@ -933,7 +933,7 @@ function renderPayments() {
     .filter(item => String(item.paid_at || item.created_at).startsWith(monthKey))
     .reduce((sum, item) => sum + Number(item.hours_added || 0), 0);
   const renewalCount = payments.filter(item => item.payment_type === "续费").length;
-  const canManagePayments = can("hours:write");
+  const canManagePayments = can("payments:write");
   const studentOptions = students
     .map(student => `<option value="${student.id}">${escapeHtml(student.name)} · ${escapeHtml(student.course)} · 剩余 ${formatHours(student.hours)} 课时</option>`)
     .join("");
@@ -1204,11 +1204,11 @@ function renderAccount() {
 
 function permissionSummary(role) {
   return {
-    owner: "全功能，含员工账号管理",
-    academic: "学员、课程、班级、教师、教室",
+    owner: "全功能，含员工账号与财务管理",
+    academic: "学员、课程、班级、缴费与教务",
     teacher: "课表、学员与教学中心查看",
     sales: "招生跟进与学员录入",
-    finance: "课时与学员信息查看",
+    finance: "缴费续费、课时与学员信息",
   }[role] || "基础权限";
 }
 
@@ -1944,7 +1944,7 @@ document.addEventListener("submit", async event => {
   }
   if (event.target.id === "paymentForm") {
     event.preventDefault();
-    if (!can("hours:write")) {
+    if (!can("payments:write")) {
       showToast("当前角色不能新增缴费记录");
       return;
     }
