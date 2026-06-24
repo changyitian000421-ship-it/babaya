@@ -7,6 +7,10 @@ let leads = [];
 let trials = [];
 let hourTransactions = [];
 let payments = [];
+let parentStudents = [];
+let parentSchedule = [];
+let parentAttendance = [];
+let parentPayments = [];
 let catalogView = "courses";
 let activeWeekStart = startOfWeek(new Date());
 let activeScheduleDay = todayScheduleIndex();
@@ -59,6 +63,7 @@ const roleOptions = [
 ];
 
 const pageContent = document.querySelector("#pageContent");
+const parentContent = document.querySelector("#parentContent");
 let activePage = "dashboard";
 
 function permissions() {
@@ -153,8 +158,20 @@ async function loadPayments() {
   payments = await api("/api/payments");
 }
 
+async function loadParentPortalData() {
+  const start = toDateInputValue(new Date());
+  const end = toDateInputValue(addDays(new Date(), 45));
+  [parentStudents, parentSchedule, parentAttendance, parentPayments] = await Promise.all([
+    api("/api/parent/students"),
+    api(`/api/parent/schedule?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),
+    api("/api/parent/attendance"),
+    api("/api/parent/payments"),
+  ]);
+}
+
 function showLogin(message = "") {
   document.querySelector("#appShell").hidden = true;
+  document.querySelector("#parentShell").hidden = true;
   document.querySelector("#loginScreen").hidden = false;
   if (message) showToast(message);
   setTimeout(() => document.querySelector('#loginForm input[name="phone"]')?.focus(), 30);
@@ -162,7 +179,14 @@ function showLogin(message = "") {
 
 function showApp() {
   document.querySelector("#loginScreen").hidden = true;
+  document.querySelector("#parentShell").hidden = true;
   document.querySelector("#appShell").hidden = false;
+}
+
+function showParentApp() {
+  document.querySelector("#loginScreen").hidden = true;
+  document.querySelector("#appShell").hidden = true;
+  document.querySelector("#parentShell").hidden = false;
 }
 
 function applyRoleUi() {
@@ -183,6 +207,12 @@ function applyRoleUi() {
 async function loadSession() {
   const data = await api("/api/session");
   currentUser = data.user;
+  if (currentUser.role === "parent") {
+    showParentApp();
+    await loadParentPortalData();
+    renderParentPortal();
+    return;
+  }
   applyRoleUi();
   showApp();
 }
@@ -201,6 +231,13 @@ async function handleLogin(event) {
     });
     currentUser = result.user;
     form.reset();
+    if (currentUser.role === "parent") {
+      showParentApp();
+      showToast(`欢迎回来，${currentUser.name}`);
+      await loadParentPortalData();
+      renderParentPortal();
+      return;
+    }
     applyRoleUi();
     showApp();
     showToast(`欢迎回来，${currentUser.name}`);
@@ -276,6 +313,76 @@ function renderDashboard() {
         </section>
       </div>
     </div>`;
+}
+
+function renderParentPortal() {
+  const totalHours = parentStudents.reduce((sum, student) => sum + Number(student.hours || 0), 0);
+  const todayText = toDateInputValue(new Date());
+  const upcoming = parentSchedule
+    .filter(item => item.lesson_date >= todayText)
+    .slice(0, 8);
+  const recentAttendance = parentAttendance.slice(0, 8);
+  const recentPayments = parentPayments.slice(0, 8);
+  parentContent.innerHTML = `
+    <section class="parent-welcome">
+      <div>
+        <span>欢迎回来</span>
+        <h1>${escapeHtml(currentUser?.name || "家长")}，孩子的学习动态在这里</h1>
+        <p>查看课表、剩余课时、上课点名和缴费记录。之后小程序也会沿用这套数据。</p>
+      </div>
+      <img src="./assets/babaya-duck-mark.png" alt="" aria-hidden="true" />
+    </section>
+    <section class="parent-metrics">
+      <div><span>绑定学员</span><strong>${parentStudents.length}</strong><small>仅显示自己孩子</small></div>
+      <div><span>剩余课时</span><strong>${formatHours(totalHours)}</strong><small>所有绑定孩子合计</small></div>
+      <div><span>未来课程</span><strong>${parentSchedule.length}</strong><small>未来 45 天</small></div>
+    </section>
+    <section class="parent-section">
+      <div class="section-toolbar"><div><h2>我的孩子</h2><p>学员档案和剩余课时</p></div></div>
+      <div class="parent-student-grid">
+        ${parentStudents.length ? parentStudents.map(student => `<article class="parent-student-card" style="--student-color:${escapeHtml(student.color || "#ff9f1c")}">
+          <span class="avatar">${escapeHtml(student.name[0])}</span>
+          <div><h3>${escapeHtml(student.name)}</h3><p>${student.age} 岁 · ${escapeHtml(student.course)}</p></div>
+          <strong>${formatHours(student.hours)} 课时</strong>
+        </article>`).join("") : `<div class="empty-state">暂未绑定孩子，请联系机构前台绑定家长手机号。</div>`}
+      </div>
+    </section>
+    <section class="parent-grid">
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title"><h2>近期课表</h2><p>按日期显示未来课程</p></div></div>
+        <div class="parent-list">
+          ${upcoming.length ? upcoming.map(item => `<div class="parent-list-row">
+            <div><strong>${escapeHtml(item.class_name)}</strong><small>${escapeHtml(item.student_name)} · ${escapeHtml(item.teacher_name)} · ${escapeHtml(item.room_name)} ${escapeHtml(item.room_code)}</small></div>
+            <span>${formatParentDate(item.lesson_date)}<br>${escapeHtml(item.start_time)}-${escapeHtml(item.end_time)}</span>
+          </div>`).join("") : `<div class="lead-empty">未来 45 天暂无课程</div>`}
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title"><h2>上课记录</h2><p>点名结果和课时扣减</p></div></div>
+        <div class="parent-list">
+          ${recentAttendance.length ? recentAttendance.map(item => `<div class="parent-list-row">
+            <div><strong>${escapeHtml(item.class_name)}</strong><small>${escapeHtml(item.student_name)} · ${escapeHtml(item.teacher_name || "老师")}</small></div>
+            <span>${formatParentDate(item.lesson_date)}<br>${escapeHtml(item.status_label)} ${formatHours(Math.abs(Number(item.hours_delta || 0)))}课时</span>
+          </div>`).join("") : `<div class="lead-empty">暂无点名记录</div>`}
+        </div>
+      </div>
+    </section>
+    <section class="panel parent-section">
+      <div class="panel-header"><div class="panel-title"><h2>缴费记录</h2><p>展示最近缴费与续费</p></div></div>
+      <div class="parent-list">
+        ${recentPayments.length ? recentPayments.map(item => `<div class="parent-list-row">
+          <div><strong>${escapeHtml(item.payment_type)} · ${formatMoney(item.amount_paid)}</strong><small>${escapeHtml(item.student_name)} · ${escapeHtml(item.payment_method)} · ${escapeHtml(item.note || "无备注")}</small></div>
+          <span>${formatParentDate(item.paid_at)}<br>+${formatHours(item.hours_added)} 课时</span>
+        </div>`).join("") : `<div class="lead-empty">暂无缴费记录</div>`}
+      </div>
+    </section>`;
+}
+
+function formatParentDate(value) {
+  if (!value) return "";
+  const date = new Date(String(value).replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+  return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
 function metricCard(iconName, label, value, trend, color) {
@@ -1752,6 +1859,7 @@ document.querySelector("#trialBackdrop").addEventListener("click", event => {
 });
 document.querySelector("#loginForm").addEventListener("submit", handleLogin);
 document.querySelector("#logoutButton").addEventListener("click", logout);
+document.querySelector("#parentLogout").addEventListener("click", logout);
 
 document.querySelector("#studentForm").addEventListener("submit", async event => {
   event.preventDefault();

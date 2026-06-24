@@ -97,6 +97,64 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   font-size: 11px;
 }
 .demo-accounts strong { color: var(--ink); font-size: 12px; }
+
+.parent-shell {
+  min-height: 100vh;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 18% 8%, rgba(255, 211, 61, .26), transparent 28%),
+    radial-gradient(circle at 86% 12%, rgba(244, 122, 18, .18), transparent 30%),
+    var(--paper);
+}
+.parent-shell[hidden] { display: none; }
+.parent-hero, .parent-main { width: min(1120px, 100%); margin: 0 auto; }
+.parent-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 0 24px;
+}
+.parent-main { display: grid; gap: 18px; padding-bottom: 36px; }
+.parent-welcome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: linear-gradient(135deg, #fffefa 0%, #fff1c8 100%);
+  box-shadow: var(--duck-shadow);
+}
+.parent-welcome span { color: var(--accent); font-size: 12px; font-weight: 800; letter-spacing: .12em; }
+.parent-welcome h1 { max-width: 620px; margin: 8px 0 8px; font-size: 28px; }
+.parent-welcome p { max-width: 580px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.parent-welcome img { width: 112px; height: 112px; object-fit: contain; filter: drop-shadow(0 12px 24px rgba(255,159,28,.22)); }
+.parent-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.parent-metrics div, .parent-student-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--white);
+}
+.parent-metrics span { color: var(--muted); font-size: 10px; }
+.parent-metrics strong { display: block; margin: 6px 0 3px; font-size: 25px; }
+.parent-metrics small { color: var(--muted); font-size: 10px; }
+.parent-section { display: grid; gap: 12px; }
+.parent-student-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.parent-student-card { display: flex; align-items: center; gap: 12px; }
+.parent-student-card .avatar { color: var(--student-color); background: color-mix(in srgb, var(--student-color) 16%, white); }
+.parent-student-card h3 { margin: 0 0 4px; font-size: 15px; }
+.parent-student-card p { margin: 0; color: var(--muted); font-size: 11px; }
+.parent-student-card strong { margin-left: auto; font-size: 16px; white-space: nowrap; }
+.parent-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.parent-list { display: grid; gap: 0; padding: 0 20px 18px; }
+.parent-list-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 0; border-top: 1px solid #f0ece7; }
+.parent-list-row strong { display: block; font-size: 12px; }
+.parent-list-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.parent-list-row span { color: var(--accent-dark); font-size: 11px; font-weight: 800; text-align: right; white-space: nowrap; }
+
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
@@ -502,6 +560,14 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
   .account-tips-card { grid-column: auto; }
   .attendance-page-grid { grid-template-columns: 1fr; }
   .attendance-row { grid-template-columns: 1fr; align-items: stretch; }
+  .parent-shell { padding: 16px; }
+  .parent-hero { align-items: flex-start; flex-direction: column; }
+  .parent-welcome { align-items: flex-start; flex-direction: column; padding: 22px; }
+  .parent-welcome h1 { font-size: 22px; }
+  .parent-welcome img { width: 82px; height: 82px; }
+  .parent-metrics, .parent-student-grid, .parent-grid { grid-template-columns: 1fr; }
+  .parent-list-row { align-items: flex-start; flex-direction: column; }
+  .parent-list-row span { text-align: left; }
 }
 @media (max-width: 480px) {
   .metric-grid { grid-template-columns: 1fr; }
