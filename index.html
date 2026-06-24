@@ -206,6 +206,28 @@
       </div>
     </div>
 
+    <div class="modal-backdrop" id="parentBindBackdrop" hidden>
+      <div class="modal management-modal" role="dialog" aria-modal="true" aria-labelledby="parentBindTitle">
+        <div class="modal-header">
+          <div><small id="parentBindEyebrow">家长端账号</small><h2 id="parentBindTitle">绑定家长账号</h2></div>
+          <button class="icon-button" id="closeParentBind" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
+        </div>
+        <form id="parentBindForm">
+          <input type="hidden" name="student_id" />
+          <div class="form-grid">
+            <label><span>家长姓名</span><input name="name" required placeholder="例如：王女士" /></label>
+            <label><span>家长手机号</span><input name="phone" required type="tel" placeholder="用于登录家长端" /></label>
+            <label class="full"><span>与孩子关系</span><input name="relation" value="家长" placeholder="妈妈、爸爸、监护人等" /></label>
+            <div class="account-default-password full"><strong>初始密码：000000</strong><span>绑定后家长可用手机号和初始密码登录家长端预览页。</span></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="secondary-button" id="cancelParentBind">取消</button>
+            <button type="submit" class="primary-button" id="saveParentBind">保存绑定</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div class="modal-backdrop" id="rosterBackdrop" hidden>
       <div class="modal roster-modal" role="dialog" aria-modal="true" aria-labelledby="rosterTitle">
         <div class="modal-header">

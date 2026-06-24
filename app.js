@@ -433,6 +433,7 @@ function renderStudents(query = "") {
           <td><strong>${formatHours(s.hours)}</strong> 课时</td>
           <td><span class="status-dot" style="--status-color:${statusColor(s.status)}">${escapeHtml(s.status)}</span></td>
           <td>${canEditStudents ? `<div class="table-actions">
+            <button class="table-action bind-parent" data-id="${s.id}" title="绑定家长账号" aria-label="绑定 ${escapeHtml(s.name)} 的家长账号">${icon("users")}</button>
             <button class="table-action edit-student" data-id="${s.id}" title="编辑学员" aria-label="编辑 ${escapeHtml(s.name)}">${icon("edit")}</button>
             <button class="table-action danger delete-student" data-id="${s.id}" title="删除学员" aria-label="删除 ${escapeHtml(s.name)}">${icon("trash")}</button>
           </div>` : `<span class="readonly-note">只读</span>`}</td>
@@ -1464,6 +1465,23 @@ function closeModal() {
   document.querySelector("#modalBackdrop").hidden = true;
 }
 
+function openParentBindModal(student) {
+  const form = document.querySelector("#parentBindForm");
+  form.reset();
+  form.elements.student_id.value = student.id;
+  form.elements.name.value = student.parent || "";
+  form.elements.phone.value = student.phone || "";
+  form.elements.relation.value = "家长";
+  document.querySelector("#parentBindTitle").textContent = `绑定 ${student.name} 的家长账号`;
+  document.querySelector("#parentBindEyebrow").textContent = "家长端登录";
+  document.querySelector("#parentBindBackdrop").hidden = false;
+  setTimeout(() => form.elements.phone.focus(), 30);
+}
+
+function closeParentBindModal() {
+  document.querySelector("#parentBindBackdrop").hidden = true;
+}
+
 function openCourseModal(course = null) {
   const form = document.querySelector("#managementForm");
   form.reset();
@@ -1708,6 +1726,12 @@ document.addEventListener("click", async event => {
     if (student) openModal(student);
   }
 
+  const bindParent = event.target.closest(".bind-parent");
+  if (bindParent) {
+    const student = students.find(item => item.id === Number(bindParent.dataset.id));
+    if (student) openParentBindModal(student);
+  }
+
   const remove = event.target.closest(".delete-student");
   if (remove) deleteStudent(Number(remove.dataset.id));
 
@@ -1838,6 +1862,11 @@ document.querySelector("#cancelManagement").addEventListener("click", closeManag
 document.querySelector("#managementBackdrop").addEventListener("click", event => {
   if (event.target.id === "managementBackdrop") closeManagement();
 });
+document.querySelector("#closeParentBind").addEventListener("click", closeParentBindModal);
+document.querySelector("#cancelParentBind").addEventListener("click", closeParentBindModal);
+document.querySelector("#parentBindBackdrop").addEventListener("click", event => {
+  if (event.target.id === "parentBindBackdrop") closeParentBindModal();
+});
 document.querySelector("#closeRoster").addEventListener("click", closeRoster);
 document.querySelector("#rosterBackdrop").addEventListener("click", event => {
   if (event.target.id === "rosterBackdrop") closeRoster();
@@ -1890,6 +1919,33 @@ document.querySelector("#studentForm").addEventListener("submit", async event =>
   } finally {
     button.classList.remove("button-loading");
     button.textContent = studentId ? "保存修改" : "保存学员";
+  }
+});
+
+document.querySelector("#parentBindForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  if (!can("students:write")) {
+    showToast("当前角色不能绑定家长账号");
+    return;
+  }
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  data.student_id = Number(data.student_id);
+  const button = document.querySelector("#saveParentBind");
+  button.classList.add("button-loading");
+  button.textContent = "绑定中...";
+  try {
+    const result = await api("/api/parent/bind", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    closeParentBindModal();
+    showToast(`家长账号已绑定：${result.parent.phone} / 初始密码 000000`);
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.classList.remove("button-loading");
+    button.textContent = "保存绑定";
   }
 });
 
@@ -2186,6 +2242,7 @@ document.addEventListener("keydown", event => {
   if (event.key === "Escape") {
     closeModal();
     closeManagement();
+    closeParentBindModal();
     closeRoster();
     closeAttendance();
     closeLeadModal();
