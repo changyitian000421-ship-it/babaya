@@ -44,6 +44,7 @@ ROLE_LABELS = {
     "teacher": "授课教师",
     "sales": "招生顾问",
     "finance": "财务",
+    "parent": "家长",
 }
 
 ROLE_PERMISSIONS = {
@@ -60,6 +61,7 @@ ROLE_PERMISSIONS = {
     "teacher": {"dashboard:read", "students:read", "catalog:read", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read"},
     "sales": {"dashboard:read", "students:read", "students:write", "leads:read", "leads:write"},
     "finance": {"dashboard:read", "students:read", "leads:read", "leads:write", "hours:read", "hours:write", "payments:read", "payments:write"},
+    "parent": {"parent:read"},
 }
 
 SEED_USERS = [
@@ -388,6 +390,8 @@ def ensure_user_schema(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE users ADD COLUMN avatar_color TEXT NOT NULL DEFAULT '#ff9f1c'")
     if "avatar_image" not in columns:
         db.execute("ALTER TABLE users ADD COLUMN avatar_image TEXT NOT NULL DEFAULT ''")
+    if "wechat_openid" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN wechat_openid TEXT NOT NULL DEFAULT ''")
     for username, phone, _password, _name, _role in SEED_USERS:
         db.execute(
             "UPDATE users SET phone = ? WHERE username = ? AND phone = ''",
@@ -397,6 +401,7 @@ def ensure_user_schema(db: sqlite3.Connection) -> None:
     db.execute("UPDATE users SET avatar_text = substr(name, 1, 1) WHERE avatar_text = ''")
     db.execute("UPDATE users SET avatar_color = '#ff9f1c' WHERE avatar_color = ''")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_users_wechat_openid ON users(wechat_openid)")
 
 
 def table_columns(db: sqlite3.Connection, table: str) -> set[str]:
@@ -633,6 +638,16 @@ def initialize_database() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+
+            CREATE TABLE IF NOT EXISTS parent_students (
+                parent_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                relation TEXT NOT NULL DEFAULT '家长',
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (parent_user_id, student_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_parent_students_student ON parent_students(student_id);
 
             CREATE TABLE IF NOT EXISTS leads (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1188,6 +1203,16 @@ def student_belongs_to_teacher(db: sqlite3.Connection, teacher_id: int, student_
     )
 
 
+def parent_student_ids(db: sqlite3.Connection, user: dict | None) -> list[int]:
+    if not user or user.get("role") != "parent":
+        return []
+    rows = db.execute(
+        "SELECT student_id FROM parent_students WHERE parent_user_id = ? ORDER BY student_id",
+        (user["id"],),
+    ).fetchall()
+    return [row["student_id"] for row in rows]
+
+
 def class_occurs_on_date(row: sqlite3.Row, lesson_date: str) -> bool:
     date = datetime.strptime(lesson_date, "%Y-%m-%d").date()
     return (
@@ -1372,6 +1397,175 @@ class AppHandler(BaseHTTPRequestHandler):
             extra_headers={"Set-Cookie": self.set_session_cookie("", 0)},
         )
 
+    def current_parent_scope(self, db: sqlite3.Connection) -> tuple[dict, list[int]] | None:
+        user = self.current_user()
+        if not user or user["role"] != "parent":
+            self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不是家长账号")
+            return None
+        return user, parent_student_ids(db, user)
+
+    def get_parent_me(self) -> None:
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            user, student_ids = scope
+        self.send_json({"user": user, "studentIds": student_ids})
+
+    def get_parent_students(self) -> None:
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            _user, student_ids = scope
+            if not student_ids:
+                self.send_json([])
+                return
+            placeholders = ", ".join("?" for _ in student_ids)
+            rows = db.execute(
+                f"SELECT * FROM students WHERE id IN ({placeholders}) ORDER BY name",
+                tuple(student_ids),
+            ).fetchall()
+        self.send_json([student_to_dict(row) for row in rows])
+
+    def get_parent_schedule(self, query: dict) -> None:
+        start = query.get("start", [""])[0].strip()
+        end = query.get("end", [""])[0].strip()
+        today = datetime.now().date()
+        try:
+            start_date = datetime.strptime(start, "%Y-%m-%d").date() if start else today
+            end_date = datetime.strptime(end, "%Y-%m-%d").date() if end else start_date + timedelta(days=30)
+        except ValueError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "日期格式无效")
+            return
+        if (end_date - start_date).days > 120:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "查询范围不能超过 120 天")
+            return
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            _user, student_ids = scope
+            if not student_ids:
+                self.send_json([])
+                return
+            placeholders = ", ".join("?" for _ in student_ids)
+            rows = db.execute(
+                f"""
+                SELECT c.*, p.name AS course_name, p.color AS course_color,
+                    t.display_name AS teacher_name, r.name AS room_name, r.code AS room_code,
+                    s.id AS student_id, s.name AS student_name
+                FROM class_students cs
+                JOIN students s ON s.id = cs.student_id
+                JOIN classes c ON c.id = cs.class_id
+                JOIN courses p ON p.id = c.course_id
+                JOIN teachers t ON t.id = c.teacher_id
+                JOIN rooms r ON r.id = c.room_id
+                WHERE cs.student_id IN ({placeholders})
+                  AND c.status IN ('招生中', '进行中')
+                  AND c.start_date <= ? AND c.end_date >= ?
+                ORDER BY c.weekday, c.start_time, s.name
+                """,
+                (*student_ids, end_date.isoformat(), start_date.isoformat()),
+            ).fetchall()
+        lessons = []
+        day_count = (end_date - start_date).days
+        for offset in range(day_count + 1):
+            current = start_date + timedelta(days=offset)
+            date_text = current.isoformat()
+            for row in rows:
+                if int(row["weekday"]) != current.weekday():
+                    continue
+                if str(row["start_date"]) <= date_text <= str(row["end_date"]):
+                    lessons.append({
+                        "class_id": row["id"],
+                        "class_name": row["name"],
+                        "student_id": row["student_id"],
+                        "student_name": row["student_name"],
+                        "course_name": row["course_name"],
+                        "teacher_name": row["teacher_name"],
+                        "room_name": row["room_name"],
+                        "room_code": row["room_code"],
+                        "lesson_date": date_text,
+                        "start_time": row["start_time"],
+                        "end_time": minutes_to_time(time_minutes(row["start_time"], "开始时间") + int(row["duration"])),
+                        "duration": row["duration"],
+                        "color": row["course_color"],
+                    })
+        self.send_json(lessons)
+
+    def get_parent_attendance(self, query: dict) -> None:
+        raw_student_id = query.get("student_id", [""])[0].strip()
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            _user, student_ids = scope
+            if raw_student_id:
+                try:
+                    selected_id = int(raw_student_id)
+                except ValueError:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "学员编号无效")
+                    return
+                if selected_id not in student_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "不能查看未绑定学员")
+                    return
+                student_ids = [selected_id]
+            if not student_ids:
+                self.send_json([])
+                return
+            placeholders = ", ".join("?" for _ in student_ids)
+            rows = db.execute(
+                f"""
+                SELECT a.*, s.name AS student_name, c.name AS class_name, t.display_name AS teacher_name
+                FROM class_attendance a
+                JOIN students s ON s.id = a.student_id
+                JOIN classes c ON c.id = a.class_id
+                LEFT JOIN teachers t ON t.id = a.teacher_id
+                WHERE a.student_id IN ({placeholders})
+                ORDER BY a.lesson_date DESC, a.id DESC
+                LIMIT 200
+                """,
+                tuple(student_ids),
+            ).fetchall()
+        self.send_json([dict(row) | {"status_label": ATTENDANCE_STATUSES.get(row["status"], row["status"])} for row in rows])
+
+    def get_parent_payments(self, query: dict) -> None:
+        raw_student_id = query.get("student_id", [""])[0].strip()
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            _user, student_ids = scope
+            if raw_student_id:
+                try:
+                    selected_id = int(raw_student_id)
+                except ValueError:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "学员编号无效")
+                    return
+                if selected_id not in student_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "不能查看未绑定学员")
+                    return
+                student_ids = [selected_id]
+            if not student_ids:
+                self.send_json([])
+                return
+            placeholders = ", ".join("?" for _ in student_ids)
+            rows = db.execute(
+                f"""
+                SELECT p.*, s.name AS student_name, s.course AS course_name,
+                    s.hours AS balance_after, u.name AS operator_name
+                FROM payments p
+                JOIN students s ON s.id = p.student_id
+                LEFT JOIN users u ON u.id = p.operator_id
+                WHERE p.student_id IN ({placeholders})
+                ORDER BY p.paid_at DESC, p.id DESC
+                LIMIT 200
+                """,
+                tuple(student_ids),
+            ).fetchall()
+        self.send_json([payment_to_dict(row) for row in rows])
+
     def update_own_profile(self) -> None:
         user = self.current_user()
         if not user:
@@ -1425,6 +1619,31 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/session":
             self.get_session()
+            return
+        if parsed.path == "/api/parent/me":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_me()
+            return
+        if parsed.path == "/api/parent/students":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_students()
+            return
+        if parsed.path == "/api/parent/schedule":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_schedule(parse_qs(parsed.query))
+            return
+        if parsed.path == "/api/parent/attendance":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_attendance(parse_qs(parsed.query))
+            return
+        if parsed.path == "/api/parent/payments":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_payments(parse_qs(parsed.query))
             return
         if parsed.path == "/api/users":
             if not self.require_permission("settings:read"):
@@ -1497,6 +1716,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("settings:write"):
                 return
             self.create_user()
+            return
+        if path == "/api/parent/bind":
+            if not self.require_permission("students:write"):
+                return
+            self.bind_parent_student()
             return
         if path == "/api/students":
             if not self.require_permission("students:write"):
@@ -1586,6 +1810,61 @@ class AppHandler(BaseHTTPRequestHandler):
             )
             row = db.execute("SELECT * FROM students WHERE id = ?", (cursor.lastrowid,)).fetchone()
         self.send_json(student_to_dict(row), HTTPStatus.CREATED)
+
+    def bind_parent_student(self) -> None:
+        try:
+            payload = self.read_json()
+            phone = str(payload.get("phone", "")).strip()
+            name = str(payload.get("name", "")).strip()
+            relation = str(payload.get("relation", "家长")).strip() or "家长"
+            student_id = integer_value(payload, "student_id", "学员", 1)
+            if not phone or len(phone) < 7:
+                raise ValueError("请填写有效家长手机号")
+            if not name:
+                raise ValueError("请填写家长姓名")
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                student = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+                if not student:
+                    raise ValueError("学员不存在")
+                parent = db.execute("SELECT * FROM users WHERE phone = ? AND active = 1", (phone,)).fetchone()
+                if parent and parent["role"] != "parent":
+                    raise ValueError("该手机号已是员工账号，不能作为家长账号绑定")
+                if not parent:
+                    cursor = db.execute(
+                        """
+                        INSERT INTO users
+                            (username, phone, password_hash, name, avatar_text, avatar_color, avatar_image, role, active, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, '', 'parent', 1, ?, ?)
+                        """,
+                        (phone, phone, hash_password(DEFAULT_INITIAL_PASSWORD), name, name[:1] or "家", COLORS[1], now, now),
+                    )
+                    parent = db.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+                else:
+                    db.execute(
+                        "UPDATE users SET name = ?, updated_at = ? WHERE id = ?",
+                        (name, now, parent["id"]),
+                    )
+                    parent = db.execute("SELECT * FROM users WHERE id = ?", (parent["id"],)).fetchone()
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO parent_students (parent_user_id, student_id, relation, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (parent["id"], student_id, relation, now),
+                )
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "家长绑定失败，请检查手机号或学员")
+            return
+        self.send_json({
+            "bound": True,
+            "parent": user_to_dict(parent),
+            "student": student_to_dict(student),
+            "initialPassword": DEFAULT_INITIAL_PASSWORD,
+        }, HTTPStatus.CREATED)
 
     def do_PUT(self) -> None:
         path = urlparse(self.path).path
