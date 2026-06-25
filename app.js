@@ -1467,11 +1467,15 @@ function closeModal() {
 
 function openParentBindModal(student) {
   const form = document.querySelector("#parentBindForm");
+  const codeBox = document.querySelector("#parentBindCodeBox");
   form.reset();
   form.elements.student_id.value = student.id;
   form.elements.name.value = student.parent || "";
   form.elements.phone.value = student.phone || "";
   form.elements.relation.value = "家长";
+  document.querySelector("#parentBindCode").textContent = "--------";
+  document.querySelector("#parentBindCodeTip").textContent = "请让家长在小程序微信登录后输入此绑定码完成孩子绑定。";
+  if (codeBox) codeBox.hidden = true;
   document.querySelector("#parentBindTitle").textContent = `绑定 ${student.name} 的家长账号`;
   document.querySelector("#parentBindEyebrow").textContent = "家长端登录";
   document.querySelector("#parentBindBackdrop").hidden = false;
@@ -1946,6 +1950,38 @@ document.querySelector("#parentBindForm").addEventListener("submit", async event
   } finally {
     button.classList.remove("button-loading");
     button.textContent = "保存绑定";
+  }
+});
+
+document.querySelector("#generateParentBindCode").addEventListener("click", async event => {
+  if (!can("students:write")) {
+    showToast("当前角色不能生成家长绑定码");
+    return;
+  }
+  const button = event.currentTarget;
+  const form = document.querySelector("#parentBindForm");
+  const studentId = Number(form.elements.student_id.value);
+  const relation = form.elements.relation.value || "家长";
+  if (!studentId) {
+    showToast("请先选择学员");
+    return;
+  }
+  button.classList.add("button-loading");
+  button.textContent = "生成中...";
+  try {
+    const result = await api("/api/parent/binding-code", {
+      method: "POST",
+      body: JSON.stringify({ student_id: studentId, relation }),
+    });
+    document.querySelector("#parentBindCode").textContent = result.code;
+    document.querySelector("#parentBindCodeTip").textContent = `${result.student.name} 的微信绑定码，有效期至 ${formatParentDate(result.expiresAt)}。`;
+    document.querySelector("#parentBindCodeBox").hidden = false;
+    showToast(`微信绑定码已生成：${result.code}`);
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.classList.remove("button-loading");
+    button.textContent = "生成微信绑定码";
   }
 });
 

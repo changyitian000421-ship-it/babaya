@@ -219,9 +219,15 @@
             <label><span>家长手机号</span><input name="phone" required type="tel" placeholder="用于登录家长端" /></label>
             <label class="full"><span>与孩子关系</span><input name="relation" value="家长" placeholder="妈妈、爸爸、监护人等" /></label>
             <div class="account-default-password full"><strong>初始密码：000000</strong><span>绑定后家长可用手机号和初始密码登录家长端预览页。</span></div>
+            <div class="parent-bind-code-card full" id="parentBindCodeBox" hidden>
+              <span>微信小程序绑定码</span>
+              <strong id="parentBindCode">--------</strong>
+              <small id="parentBindCodeTip">请让家长在小程序微信登录后输入此绑定码完成孩子绑定。</small>
+            </div>
           </div>
           <div class="modal-footer">
             <button type="button" class="secondary-button" id="cancelParentBind">取消</button>
+            <button type="button" class="secondary-button" id="generateParentBindCode">生成微信绑定码</button>
             <button type="submit" class="primary-button" id="saveParentBind">保存绑定</button>
           </div>
         </form>

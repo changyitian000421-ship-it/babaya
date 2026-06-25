@@ -493,6 +493,10 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; color
 .table-action:disabled { opacity: .35; cursor: not-allowed; }
 .account-default-password { padding: 12px; border: 1px dashed #e8d5bf; border-radius: 12px; background: #fff9ed; }
 .account-default-password strong { display: block; margin-bottom: 4px; font-size: 12px; }.account-default-password span { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.parent-bind-code-card { padding: 13px 14px; border: 1px solid #f3c56a; border-radius: 14px; background: linear-gradient(135deg, #fff9df, #fff0bf); }
+.parent-bind-code-card span { display: block; color: #9b5b13; font-size: 11px; font-weight: 700; }
+.parent-bind-code-card strong { display: block; margin: 8px 0 5px; letter-spacing: 5px; color: #5d3506; font-size: 26px; line-height: 1; }
+.parent-bind-code-card small { color: #9b6a2c; font-size: 10px; line-height: 1.5; }
 .account-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .account-profile-card { overflow: hidden; }
 .profile-preview { display: flex; align-items: center; gap: 13px; padding: 0 22px 4px; }

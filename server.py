@@ -19,7 +19,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
+from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parent
@@ -37,6 +38,11 @@ COLORS = ["#ff9f1c", "#ffd33d", "#f47a12", "#715b87", "#4f896f"]
 SESSION_COOKIE = "sd_session"
 SESSION_HOURS = 12
 DEFAULT_INITIAL_PASSWORD = "000000"
+WECHAT_APP_ID = os.environ.get("WECHAT_APP_ID", "").strip()
+WECHAT_APP_SECRET = os.environ.get("WECHAT_APP_SECRET", "").strip()
+WECHAT_BIND_TOKEN_MINUTES = 15
+PARENT_BIND_CODE_DAYS = 7
+BIND_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 ROLE_LABELS = {
     "owner": "校长 / 管理员",
@@ -290,7 +296,7 @@ def translate_postgres_sql(sql: str) -> str:
 
 
 def should_return_id(sql: str) -> bool:
-    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|trial_lessons|payments|hour_transactions|class_attendance)\b", sql, re.IGNORECASE))
+    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|trial_lessons|payments|hour_transactions|class_attendance|parent_binding_codes|wechat_login_tokens)\b", sql, re.IGNORECASE))
 
 
 def postgres_schema(script: str) -> str:
@@ -624,6 +630,7 @@ def initialize_database() -> None:
                 avatar_text TEXT NOT NULL DEFAULT '',
                 avatar_color TEXT NOT NULL DEFAULT '#ff9f1c',
                 avatar_image TEXT NOT NULL DEFAULT '',
+                wechat_openid TEXT NOT NULL DEFAULT '',
                 role TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -648,6 +655,31 @@ def initialize_database() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_parent_students_student ON parent_students(student_id);
+
+            CREATE TABLE IF NOT EXISTS parent_binding_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                relation TEXT NOT NULL DEFAULT '家长',
+                expires_at TEXT NOT NULL,
+                used_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_parent_binding_codes_student ON parent_binding_codes(student_id);
+            CREATE INDEX IF NOT EXISTS idx_parent_binding_codes_expires ON parent_binding_codes(expires_at);
+
+            CREATE TABLE IF NOT EXISTS wechat_login_tokens (
+                token TEXT PRIMARY KEY,
+                openid TEXT NOT NULL,
+                session_key TEXT NOT NULL DEFAULT '',
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_wechat_login_tokens_openid ON wechat_login_tokens(openid);
 
             CREATE TABLE IF NOT EXISTS leads (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1213,6 +1245,48 @@ def parent_student_ids(db: sqlite3.Connection, user: dict | None) -> list[int]:
     return [row["student_id"] for row in rows]
 
 
+def generate_parent_binding_code(db: sqlite3.Connection) -> str:
+    active_cutoff = datetime.now().isoformat(timespec="seconds")
+    for _ in range(30):
+        code = "".join(secrets.choice(BIND_CODE_ALPHABET) for _ in range(8))
+        exists = db.execute(
+            """
+            SELECT id FROM parent_binding_codes
+            WHERE code = ? AND used_at = '' AND expires_at > ?
+            """,
+            (code, active_cutoff),
+        ).fetchone()
+        if not exists:
+            return code
+    raise ValueError("生成绑定码失败，请稍后重试")
+
+
+def exchange_wechat_code(code: str) -> dict:
+    if not code:
+        raise ValueError("缺少微信登录 code")
+    if not WECHAT_APP_ID or not WECHAT_APP_SECRET:
+        openid = "dev_" + hashlib.sha256(code.encode("utf-8")).hexdigest()[:24]
+        return {"openid": openid, "session_key": "dev-session"}
+    query = urlencode(
+        {
+            "appid": WECHAT_APP_ID,
+            "secret": WECHAT_APP_SECRET,
+            "js_code": code,
+            "grant_type": "authorization_code",
+        }
+    )
+    with urlopen(f"https://api.weixin.qq.com/sns/jscode2session?{query}", timeout=8) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if result.get("errcode"):
+        raise ValueError(f"微信登录失败：{result.get('errmsg', result['errcode'])}")
+    if not result.get("openid"):
+        raise ValueError("微信登录没有返回 openid")
+    return {
+        "openid": str(result["openid"]),
+        "session_key": str(result.get("session_key", "")),
+    }
+
+
 def class_occurs_on_date(row: sqlite3.Row, lesson_date: str) -> bool:
     date = datetime.strptime(lesson_date, "%Y-%m-%d").date()
     return (
@@ -1347,6 +1421,24 @@ class AppHandler(BaseHTTPRequestHandler):
     def set_session_cookie(self, token: str, max_age: int) -> str:
         return f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}"
 
+    def issue_session(self, db: sqlite3.Connection, user_id: int) -> tuple[str, sqlite3.Row]:
+        token = secrets.token_urlsafe(32)
+        now = datetime.now()
+        expires_at = now + timedelta(hours=SESSION_HOURS)
+        db.execute(
+            "INSERT INTO auth_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (
+                token,
+                user_id,
+                now.isoformat(timespec="seconds"),
+                expires_at.isoformat(timespec="seconds"),
+            ),
+        )
+        row = db.execute("SELECT * FROM users WHERE id = ? AND active = 1", (user_id,)).fetchone()
+        if not row:
+            raise ValueError("账号不可用")
+        return token, row
+
     def get_session(self) -> None:
         user = self.current_user()
         if not user:
@@ -1370,18 +1462,7 @@ class AppHandler(BaseHTTPRequestHandler):
             if not row or not verify_password(password, row["password_hash"]):
                 self.send_error_json(HTTPStatus.UNAUTHORIZED, "手机号或密码不正确")
                 return
-            token = secrets.token_urlsafe(32)
-            now = datetime.now()
-            expires_at = now + timedelta(hours=SESSION_HOURS)
-            db.execute(
-                "INSERT INTO auth_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-                (
-                    token,
-                    row["id"],
-                    now.isoformat(timespec="seconds"),
-                    expires_at.isoformat(timespec="seconds"),
-                ),
-            )
+            token, row = self.issue_session(db, row["id"])
         self.send_json(
             {"user": user_to_dict(row)},
             extra_headers={"Set-Cookie": self.set_session_cookie(token, SESSION_HOURS * 60 * 60)},
@@ -1709,6 +1790,12 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/login":
             self.login()
             return
+        if path == "/api/wechat/login":
+            self.wechat_login()
+            return
+        if path == "/api/wechat/bind":
+            self.wechat_bind()
+            return
         if path == "/api/logout":
             self.logout()
             return
@@ -1721,6 +1808,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("students:write"):
                 return
             self.bind_parent_student()
+            return
+        if path == "/api/parent/binding-code":
+            if not self.require_permission("students:write"):
+                return
+            self.create_parent_binding_code()
             return
         if path == "/api/students":
             if not self.require_permission("students:write"):
@@ -1865,6 +1957,217 @@ class AppHandler(BaseHTTPRequestHandler):
             "student": student_to_dict(student),
             "initialPassword": DEFAULT_INITIAL_PASSWORD,
         }, HTTPStatus.CREATED)
+
+    def create_parent_binding_code(self) -> None:
+        try:
+            payload = self.read_json()
+            user = self.current_user()
+            student_id = integer_value(payload, "student_id", "学员", 1)
+            relation = str(payload.get("relation", "家长")).strip() or "家长"
+            now = datetime.now()
+            expires_at = now + timedelta(days=PARENT_BIND_CODE_DAYS)
+            with connect() as db:
+                student = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+                if not student:
+                    raise ValueError("学员不存在")
+                code = generate_parent_binding_code(db)
+                cursor = db.execute(
+                    """
+                    INSERT INTO parent_binding_codes
+                        (code, student_id, created_by, relation, expires_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        code,
+                        student_id,
+                        user["id"] if user else None,
+                        relation,
+                        expires_at.isoformat(timespec="seconds"),
+                        now.isoformat(timespec="seconds"),
+                    ),
+                )
+                row = db.execute("SELECT * FROM parent_binding_codes WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "绑定码生成失败，请重试")
+            return
+        self.send_json(
+            {
+                "id": row["id"],
+                "code": row["code"],
+                "relation": row["relation"],
+                "expiresAt": row["expires_at"],
+                "student": student_to_dict(student),
+            },
+            HTTPStatus.CREATED,
+        )
+
+    def wechat_login(self) -> None:
+        try:
+            payload = self.read_json()
+            auth = exchange_wechat_code(str(payload.get("code", "")).strip())
+            openid = auth["openid"]
+            session_key = auth.get("session_key", "")
+            now = datetime.now()
+            expires_at = now + timedelta(minutes=WECHAT_BIND_TOKEN_MINUTES)
+            with connect() as db:
+                db.execute("DELETE FROM wechat_login_tokens WHERE expires_at <= ?", (now.isoformat(timespec="seconds"),))
+                row = db.execute(
+                    "SELECT * FROM users WHERE wechat_openid = ? AND active = 1",
+                    (openid,),
+                ).fetchone()
+                if row:
+                    if row["role"] != "parent":
+                        raise ValueError("该微信已绑定员工账号，不能登录家长端")
+                    token, row = self.issue_session(db, row["id"])
+                    self.send_json(
+                        {
+                            "needsBinding": False,
+                            "user": user_to_dict(row),
+                            "wechatMode": "official" if WECHAT_APP_ID and WECHAT_APP_SECRET else "development",
+                        },
+                        extra_headers={"Set-Cookie": self.set_session_cookie(token, SESSION_HOURS * 60 * 60)},
+                    )
+                    return
+                bind_token = secrets.token_urlsafe(32)
+                db.execute(
+                    """
+                    INSERT INTO wechat_login_tokens (token, openid, session_key, expires_at, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        bind_token,
+                        openid,
+                        session_key,
+                        expires_at.isoformat(timespec="seconds"),
+                        now.isoformat(timespec="seconds"),
+                    ),
+                )
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"微信登录暂不可用：{exc}")
+            return
+        self.send_json(
+            {
+                "needsBinding": True,
+                "bindToken": bind_token,
+                "expiresAt": expires_at.isoformat(timespec="seconds"),
+                "wechatMode": "official" if WECHAT_APP_ID and WECHAT_APP_SECRET else "development",
+            }
+        )
+
+    def wechat_bind(self) -> None:
+        try:
+            payload = self.read_json()
+            bind_token = str(payload.get("bind_token") or payload.get("bindToken") or "").strip()
+            binding_code = str(payload.get("binding_code") or payload.get("bindingCode") or "").strip().upper()
+            name = str(payload.get("name", "")).strip() or "微信家长"
+            phone = str(payload.get("phone", "")).strip()
+            relation_override = str(payload.get("relation", "")).strip()
+            if not bind_token:
+                raise ValueError("缺少微信绑定 token")
+            if not binding_code:
+                raise ValueError("请输入绑定码")
+            if phone and len(phone) < 7:
+                raise ValueError("手机号格式不正确")
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                pending = db.execute(
+                    "SELECT * FROM wechat_login_tokens WHERE token = ? AND expires_at > ?",
+                    (bind_token, now),
+                ).fetchone()
+                if not pending:
+                    raise ValueError("微信登录已过期，请重新登录")
+                code_row = db.execute(
+                    """
+                    SELECT c.*, s.name AS student_name
+                    FROM parent_binding_codes c
+                    JOIN students s ON s.id = c.student_id
+                    WHERE c.code = ? AND c.used_at = '' AND c.expires_at > ?
+                    """,
+                    (binding_code, now),
+                ).fetchone()
+                if not code_row:
+                    raise ValueError("绑定码无效或已过期")
+                openid = pending["openid"]
+                parent = db.execute(
+                    "SELECT * FROM users WHERE wechat_openid = ? AND active = 1",
+                    (openid,),
+                ).fetchone()
+                if parent and parent["role"] != "parent":
+                    raise ValueError("该微信已绑定员工账号，不能绑定家长端")
+                if not parent and phone:
+                    parent = db.execute("SELECT * FROM users WHERE phone = ? AND active = 1", (phone,)).fetchone()
+                    if parent and parent["role"] != "parent":
+                        raise ValueError("该手机号已是员工账号，不能作为家长账号绑定")
+                    if parent and parent["wechat_openid"] and parent["wechat_openid"] != openid:
+                        raise ValueError("该手机号已绑定其他微信")
+                if parent:
+                    db.execute(
+                        """
+                        UPDATE users
+                        SET name = ?, wechat_openid = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (name, openid, now, parent["id"]),
+                    )
+                    parent_id = parent["id"]
+                else:
+                    wx_phone = phone or f"wx_{hashlib.sha256(openid.encode('utf-8')).hexdigest()[:24]}"
+                    cursor = db.execute(
+                        """
+                        INSERT INTO users
+                            (username, phone, password_hash, name, avatar_text, avatar_color, avatar_image,
+                             wechat_openid, role, active, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, '', ?, 'parent', 1, ?, ?)
+                        """,
+                        (
+                            wx_phone,
+                            wx_phone,
+                            hash_password(DEFAULT_INITIAL_PASSWORD),
+                            name,
+                            name[:1] or "家",
+                            COLORS[1],
+                            openid,
+                            now,
+                            now,
+                        ),
+                    )
+                    parent_id = cursor.lastrowid
+                relation = relation_override or code_row["relation"] or "家长"
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO parent_students (parent_user_id, student_id, relation, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (parent_id, code_row["student_id"], relation, now),
+                )
+                db.execute(
+                    "UPDATE parent_binding_codes SET used_by = ?, used_at = ? WHERE id = ?",
+                    (parent_id, now, code_row["id"]),
+                )
+                db.execute("DELETE FROM wechat_login_tokens WHERE token = ?", (bind_token,))
+                token, parent = self.issue_session(db, parent_id)
+                student = db.execute("SELECT * FROM students WHERE id = ?", (code_row["student_id"],)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "微信绑定失败，请检查手机号或绑定码")
+            return
+        self.send_json(
+            {
+                "bound": True,
+                "user": user_to_dict(parent),
+                "student": student_to_dict(student),
+            },
+            HTTPStatus.CREATED,
+            extra_headers={"Set-Cookie": self.set_session_cookie(token, SESSION_HOURS * 60 * 60)},
+        )
 
     def do_PUT(self) -> None:
         path = urlparse(self.path).path
