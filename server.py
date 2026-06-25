@@ -537,6 +537,34 @@ def validate_attendance_payload(payload: dict) -> dict:
     return {"lesson_date": lesson_date, "records": parsed_records}
 
 
+def validate_dashboard_todos(payload: dict) -> list[dict]:
+    todos = payload.get("todos", [])
+    if not isinstance(todos, list):
+        raise ValueError("待办数据格式错误")
+    parsed = []
+    for index, item in enumerate(todos[:8]):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "")).strip()
+        if not title:
+            continue
+        parsed.append({
+            "title": title[:60],
+            "description": str(item.get("description", "")).strip()[:160],
+            "time_label": str(item.get("time", item.get("time_label", ""))).strip()[:20] or "待处理",
+            "color": str(item.get("color", COLORS[index % len(COLORS)])).strip()[:20] or COLORS[index % len(COLORS)],
+            "position": len(parsed),
+        })
+    return parsed
+
+
+def validate_teacher_profile(payload: dict) -> dict:
+    specialty = str(payload.get("specialty", "")).strip()
+    if len(specialty) > 300:
+        raise ValueError("教师简介最多 300 字")
+    return {"specialty": specialty}
+
+
 def initialize_database() -> None:
     if DATABASE_KIND == "sqlite":
         DATABASE.parent.mkdir(parents=True, exist_ok=True)
@@ -773,6 +801,20 @@ def initialize_database() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_class_attendance_class_date ON class_attendance(class_id, lesson_date);
             CREATE INDEX IF NOT EXISTS idx_class_attendance_student ON class_attendance(student_id);
+
+            CREATE TABLE IF NOT EXISTS dashboard_todos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                time_label TEXT NOT NULL DEFAULT '',
+                color TEXT NOT NULL DEFAULT '#ff9f1c',
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_dashboard_todos_user ON dashboard_todos(user_id, position);
             """
         db.executescript(postgres_schema(schema_sql) if DATABASE_KIND == "postgres" else schema_sql)
         ensure_user_schema(db)
@@ -1023,6 +1065,17 @@ def teacher_to_dict(row: sqlite3.Row) -> dict:
     return dict(row)
 
 
+def dashboard_todo_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "description": row["description"],
+        "time": row["time_label"],
+        "color": row["color"],
+        "position": row["position"],
+    }
+
+
 def room_to_dict(row: sqlite3.Row) -> dict:
     return dict(row)
 
@@ -1030,7 +1083,7 @@ def room_to_dict(row: sqlite3.Row) -> dict:
 def class_to_dict(row: sqlite3.Row, students: list[dict] | None = None) -> dict:
     item = dict(row)
     item["students"] = students or []
-    item["current"] = len(item["students"])
+    item["current"] = len(item["students"]) if students is not None else int(item.get("current") or 0)
     item["end_time"] = minutes_to_time(time_minutes(item["start_time"], "开始时间") + int(item["duration"]))
     return item
 
@@ -1209,6 +1262,19 @@ def teacher_ids_for_user(db: sqlite3.Connection, user: sqlite3.Row | dict | None
     if not user or user["role"] in {"owner", "academic", "finance"}:
         return None
     if user["role"] != "teacher":
+        return []
+    rows = db.execute(
+        """
+        SELECT id FROM teachers
+        WHERE active = 1 AND (display_name = ? OR name = ? OR phone = ?)
+        """,
+        (user["name"], user["name"], user["phone"]),
+    ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def own_teacher_ids_for_user(db: sqlite3.Connection, user: sqlite3.Row | dict | None) -> list[int]:
+    if not user or user["role"] not in {"owner", "teacher"}:
         return []
     rows = db.execute(
         """
@@ -1693,6 +1759,64 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"changed": True})
 
+    def update_own_todos(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        try:
+            todos = validate_dashboard_todos(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                db.execute("DELETE FROM dashboard_todos WHERE user_id = ?", (user["id"],))
+                db.executemany(
+                    """
+                    INSERT INTO dashboard_todos
+                        (user_id, title, description, time_label, color, position, created_at, updated_at)
+                    VALUES (:user_id, :title, :description, :time_label, :color, :position, :created_at, :updated_at)
+                    """,
+                    [
+                        {**todo, "user_id": user["id"], "created_at": now, "updated_at": now}
+                        for todo in todos
+                    ],
+                )
+                rows = db.execute(
+                    "SELECT * FROM dashboard_todos WHERE user_id = ? ORDER BY position, id",
+                    (user["id"],),
+                ).fetchall()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"todos": [dashboard_todo_to_dict(row) for row in rows]})
+
+    def update_own_teacher_profile(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        if user["role"] != "teacher":
+            self.send_error_json(HTTPStatus.FORBIDDEN, "只有教师账号可以编辑自己的教师简介")
+            return
+        try:
+            data = validate_teacher_profile(self.read_json())
+            with connect() as db:
+                teacher_ids = own_teacher_ids_for_user(db, user)
+                if not teacher_ids:
+                    raise ValueError("没有找到与当前账号匹配的教师档案，请让校长检查教师姓名或手机号")
+                placeholders = ", ".join("?" for _ in teacher_ids)
+                db.execute(
+                    f"UPDATE teachers SET specialty = ? WHERE id IN ({placeholders})",
+                    (data["specialty"], *teacher_ids),
+                )
+                rows = db.execute(
+                    f"SELECT * FROM teachers WHERE id IN ({placeholders}) ORDER BY id",
+                    tuple(teacher_ids),
+                ).fetchall()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"teachers": [teacher_to_dict(row) for row in rows]})
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
@@ -2176,6 +2300,12 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/me/password":
             self.update_own_password()
+            return
+        if path == "/api/me/todos":
+            self.update_own_todos()
+            return
+        if path == "/api/me/teacher-profile":
+            self.update_own_teacher_profile()
             return
         parts = path.strip("/").split("/")
         if len(parts) != 3 or parts[0] != "api":
@@ -3344,21 +3474,168 @@ class AppHandler(BaseHTTPRequestHandler):
         )
 
     def get_dashboard(self) -> None:
+        user = self.current_user()
         with connect() as db:
-            total = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
-            active = db.execute("SELECT COUNT(*) FROM students WHERE status = '在读'").fetchone()[0]
-            renewals = db.execute("SELECT COUNT(*) FROM students WHERE status = '待续费'").fetchone()[0]
-            hours = db.execute("SELECT COALESCE(SUM(hours), 0) FROM students").fetchone()[0]
-            class_count = db.execute(
-                "SELECT COUNT(*) FROM classes WHERE status IN ('招生中', '进行中')"
-            ).fetchone()[0]
+            role = user["role"] if user else ""
+            teacher_ids: list[int] | None
+            if role == "academic":
+                teacher_ids = None
+                scope = "all"
+                scope_label = "全体教师"
+            elif role in {"owner", "teacher"}:
+                teacher_ids = own_teacher_ids_for_user(db, user)
+                scope = "own"
+                scope_label = "我的授课"
+            else:
+                teacher_ids = None
+                scope = "all"
+                scope_label = "全校数据"
+
+            class_scope_sql = ""
+            student_scope_sql = ""
+            params: tuple = ()
+            if teacher_ids == []:
+                total = active = renewals = class_count = today_total = today_present = 0
+                hours = 0
+                recent_classes = []
+            else:
+                if teacher_ids is not None:
+                    placeholders = ", ".join("?" for _ in teacher_ids)
+                    class_scope_sql = f"AND c.teacher_id IN ({placeholders})"
+                    student_scope_sql = f"""
+                        JOIN class_students cs ON cs.student_id = s.id
+                        JOIN classes c ON c.id = cs.class_id
+                        WHERE c.teacher_id IN ({placeholders})
+                    """
+                    params = tuple(teacher_ids)
+                if teacher_ids is None:
+                    total = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+                    active = db.execute("SELECT COUNT(*) FROM students WHERE status = '在读'").fetchone()[0]
+                    renewals = db.execute("SELECT COUNT(*) FROM students WHERE status = '待续费'").fetchone()[0]
+                    hours = db.execute("SELECT COALESCE(SUM(hours), 0) FROM students").fetchone()[0]
+                else:
+                    student_rows = db.execute(
+                        f"""
+                        SELECT DISTINCT s.id, s.status, s.hours
+                        FROM students s
+                        {student_scope_sql}
+                        """,
+                        params,
+                    ).fetchall()
+                    total = len(student_rows)
+                    active = sum(1 for row in student_rows if row["status"] == "在读")
+                    renewals = sum(1 for row in student_rows if row["status"] == "待续费")
+                    hours = sum(float(row["hours"] or 0) for row in student_rows)
+                class_count = db.execute(
+                    f"""
+                    SELECT COUNT(*) FROM classes c
+                    WHERE c.status IN ('招生中', '进行中') {class_scope_sql}
+                    """,
+                    params,
+                ).fetchone()[0]
+                today = datetime.now().strftime("%Y-%m-%d")
+                weekday = datetime.now().weekday()
+                today_total = db.execute(
+                    f"""
+                    SELECT COUNT(*) FROM class_students cs
+                    JOIN classes c ON c.id = cs.class_id
+                    WHERE c.status IN ('招生中', '进行中')
+                        AND c.weekday = ?
+                        AND c.start_date <= ?
+                        AND c.end_date >= ?
+                        {class_scope_sql}
+                    """,
+                    (weekday, today, today, *params),
+                ).fetchone()[0]
+                today_present = db.execute(
+                    f"""
+                    SELECT COUNT(*) FROM class_attendance a
+                    JOIN classes c ON c.id = a.class_id
+                    WHERE a.lesson_date = ?
+                        AND a.status = 'present'
+                        {class_scope_sql}
+                    """,
+                    (today, *params),
+                ).fetchone()[0]
+                recent_classes = db.execute(
+                    f"""
+                    SELECT c.*, p.name AS course_name, p.color AS course_color,
+                        t.display_name AS teacher_name, t.color AS teacher_color,
+                        r.name AS room_name, r.code AS room_code, r.capacity AS room_capacity,
+                        COUNT(cs.student_id) AS current
+                    FROM classes c
+                    JOIN courses p ON p.id = c.course_id
+                    JOIN teachers t ON t.id = c.teacher_id
+                    JOIN rooms r ON r.id = c.room_id
+                    LEFT JOIN class_students cs ON cs.class_id = c.id
+                    WHERE c.status IN ('招生中', '进行中') {class_scope_sql}
+                    GROUP BY c.id
+                    ORDER BY c.weekday, c.start_time, c.id
+                    """,
+                    params,
+                ).fetchall()
+            teacher_overview = []
+            if role in {"owner", "academic"}:
+                teacher_rows = db.execute(
+                    """
+                    SELECT t.id, t.display_name, t.color, t.specialty,
+                        COUNT(DISTINCT c.id) AS class_count,
+                        COUNT(DISTINCT cs.student_id) AS student_count
+                    FROM teachers t
+                    LEFT JOIN classes c ON c.teacher_id = t.id AND c.status IN ('招生中', '进行中')
+                    LEFT JOIN class_students cs ON cs.class_id = c.id
+                    WHERE t.active = 1
+                    GROUP BY t.id
+                    ORDER BY class_count DESC, t.id
+                    """
+                ).fetchall()
+                teacher_overview = [dict(row) for row in teacher_rows]
+            lead_counts = {
+                row["stage"]: row["count"]
+                for row in db.execute(
+                    "SELECT stage, COUNT(*) AS count FROM leads WHERE stage != '无效' GROUP BY stage"
+                ).fetchall()
+            }
+            trial_counts = {
+                row["status"]: row["count"]
+                for row in db.execute(
+                    "SELECT status, COUNT(*) AS count FROM trial_lessons GROUP BY status"
+                ).fetchall()
+            }
+            month_start = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+            lead_conversion = {
+                "total": sum(lead_counts.values()),
+                "monthNew": db.execute(
+                    "SELECT COUNT(*) FROM leads WHERE stage != '无效' AND date(created_at) >= ?",
+                    (month_start,),
+                ).fetchone()[0],
+                "new": lead_counts.get("新线索", 0),
+                "contacted": lead_counts.get("已联系", 0),
+                "trialScheduled": lead_counts.get("待试听", 0) + trial_counts.get("待试听", 0),
+                "trialCompleted": lead_counts.get("待报名", 0) + trial_counts.get("已试听", 0),
+                "enrolled": lead_counts.get("已报名", 0) + trial_counts.get("已转正", 0),
+            }
+            custom_todo_rows = []
+            if user:
+                custom_todo_rows = db.execute(
+                    "SELECT * FROM dashboard_todos WHERE user_id = ? ORDER BY position, id",
+                    (user["id"],),
+                ).fetchall()
         self.send_json(
             {
+                "scope": scope,
+                "scopeLabel": scope_label,
                 "totalStudents": total,
                 "activeStudents": active,
                 "renewalStudents": renewals,
                 "remainingHours": hours,
                 "activeClasses": class_count,
+                "todayAttendancePresent": today_present,
+                "todayAttendanceTotal": today_total,
+                "recentClasses": [class_to_dict(row) for row in recent_classes],
+                "teacherOverview": teacher_overview,
+                "leadConversion": lead_conversion,
+                "customTodos": [dashboard_todo_to_dict(row) for row in custom_todo_rows],
             }
         )
 

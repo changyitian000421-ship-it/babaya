@@ -14,22 +14,36 @@ let parentPayments = [];
 let catalogView = "courses";
 let activeWeekStart = startOfWeek(new Date());
 let activeScheduleDay = todayScheduleIndex();
+let pendingScheduleFocusId = "";
+let dashboardTodoEditing = false;
 let dashboardStats = {
+  scope: "all",
+  scopeLabel: "全校数据",
   totalStudents: 0,
   activeStudents: 0,
   renewalStudents: 0,
   remainingHours: 0,
+  activeClasses: 0,
+  todayAttendancePresent: 0,
+  todayAttendanceTotal: 0,
+  recentClasses: [],
+  teacherOverview: [],
+  leadConversion: {
+    total: 0,
+    monthNew: 0,
+    new: 0,
+    contacted: 0,
+    trialScheduled: 0,
+    trialCompleted: 0,
+    enrolled: 0,
+  },
+  customTodos: [],
 };
-
-const dashboardClasses = [
-  { time: "14:00", duration: "90 分钟", name: "少儿主持基础班", room: "春日教室 · A203", teacher: "陈老师", teacherKey: "陈", current: 10, max: 12, color: "#ff9f1c" },
-  { time: "16:00", duration: "90 分钟", name: "朗诵表达进阶班", room: "剧场教室 · B101", teacher: "苏老师", teacherKey: "苏", current: 8, max: 10, color: "#715b87" },
-  { time: "18:30", duration: "60 分钟", name: "演讲与口才一对一", room: "星光教室 · A205", teacher: "方老师", teacherKey: "方", current: 1, max: 1, color: "#4f896f" },
-];
 
 const leadStages = ["新线索", "已联系", "待试听", "待报名", "已报名"];
 const trialStatuses = ["待试听", "已试听", "已转正", "已取消"];
 const trialResults = ["未填写", "适合报名", "需再跟进", "暂不适合", "未到场"];
+const COLORS_FOR_TODO_PICKER = ["#ff9f1c", "#ffd33d", "#715b87", "#4f896f", "#f47a12"];
 
 const pageMeta = {
   dashboard: ["总览", "下午好，林老师"],
@@ -80,6 +94,28 @@ function allowedPages() {
 
 function canOpenPage(page) {
   return allowedPages().includes(page);
+}
+
+function currentTeacherIds() {
+  if (currentUser?.role !== "teacher") return null;
+  const userName = String(currentUser?.name || "").trim();
+  const userPhone = String(currentUser?.phone || "").trim();
+  return catalog.teachers
+    .filter(teacher => [teacher.name, teacher.display_name, teacher.phone].some(value => String(value || "").trim() === userName)
+      || String(teacher.phone || "").trim() === userPhone)
+    .map(teacher => Number(teacher.id));
+}
+
+function visibleClassesForCurrentUser(classItems = catalog.classes) {
+  const teacherIds = currentTeacherIds();
+  if (teacherIds === null) return classItems;
+  return classItems.filter(item => teacherIds.includes(Number(item.teacher_id)));
+}
+
+function currentTeacherProfiles() {
+  const teacherIds = currentTeacherIds();
+  if (!teacherIds) return [];
+  return catalog.teachers.filter(teacher => teacherIds.includes(Number(teacher.id)));
 }
 
 function icon(id) {
@@ -261,54 +297,59 @@ async function logout() {
 }
 
 function renderDashboard() {
+  const recentClasses = dashboardRecentClasses();
+  const attendanceTotal = Number(dashboardStats.todayAttendanceTotal || 0);
+  const attendancePresent = Number(dashboardStats.todayAttendancePresent || 0);
+  const attendanceRate = attendanceTotal ? Math.round(attendancePresent / attendanceTotal * 100) : 0;
+  const leadConversion = dashboardStats.leadConversion || {};
+  const generatedTodos = dashboardTodos(recentClasses, attendancePresent, attendanceTotal);
+  const todoItems = effectiveDashboardTodos(generatedTodos);
+  const insight = dashboardInsight(recentClasses, attendanceRate);
+  const recentTitle = dashboardStats.scope === "own" ? "我的近期课程" : "近期课程";
+  const recentDescription = dashboardStats.scope === "own"
+    ? "只显示当前账号对应授课教师的课程"
+    : "按时间顺序查看全体教师近期课程";
   pageContent.innerHTML = `
-    <p class="date-line">${formatToday()} · 本周课程安排已更新</p>
+    <p class="date-line">${formatToday()} · 当前范围：${escapeHtml(dashboardStats.scopeLabel || "全校数据")}</p>
     <div class="metric-grid">
-      ${metricCard("users", "在读学员", dashboardStats.activeStudents, `全部 ${dashboardStats.totalStudents} 人`, "orange")}
-      ${metricCard("calendar", "今日到课", "19 / 22", "到课率 86%", "purple")}
-      ${metricCard("wallet", "剩余课时总量", formatHours(dashboardStats.remainingHours), "实时数据", "green")}
-      ${metricCard("clock", "待续费学员", dashboardStats.renewalStudents, "需要跟进", "yellow")}
+      ${metricCard("users", "在读学员", dashboardStats.activeStudents, `全部 ${dashboardStats.totalStudents} 人`, "orange", "students")}
+      ${metricCard("calendar", "今日到课", `${attendancePresent} / ${attendanceTotal}`, attendanceTotal ? `到课率 ${attendanceRate}%` : "今日暂无课程", "purple", "attendance")}
+      ${metricCard("wallet", "剩余课时总量", formatHours(dashboardStats.remainingHours), "实时数据", "green", "hours")}
+      ${metricCard("clock", "待续费学员", dashboardStats.renewalStudents, "需要跟进", "yellow", "students")}
     </div>
     <div class="dashboard-grid">
       <div class="stack">
         <section class="panel">
           <div class="panel-header">
-            <div class="panel-title"><h2>近期课程</h2><p>按时间顺序查看本周教学安排</p></div>
+            <div class="panel-title"><h2>${recentTitle}</h2><p>${recentDescription}</p></div>
             <button class="text-button" data-go="schedule">查看完整课表 ${icon("arrow")}</button>
           </div>
           <div class="class-list">
-            ${dashboardClasses.map(classRow).join("")}
+            ${recentClasses.length ? recentClasses.map(classRow).join("") : `<div class="empty-state">${dashboardStats.scope === "own" ? "当前账号还没有匹配到自己的近期课程，请检查教师名单中的姓名或手机号。" : "近期还没有排课。"}</div>`}
           </div>
         </section>
         <section class="insight-card">
-          <small>教学观察 · WEEKLY INSIGHT</small>
-          <h3>本周学员作品提交率提升了 18%，朗诵进阶班表现最积极。</h3>
-          <p>建议在周末家长群展示优秀作品，帮助家长看见成长，也为下月续费做好铺垫。</p>
+          <small>${escapeHtml(insight.label)}</small>
+          <h3>${escapeHtml(insight.title)}</h3>
+          <p>${escapeHtml(insight.description)}</p>
         </section>
       </div>
       <div class="stack">
+        ${renderTeacherCourseOverview()}
         <section class="panel">
           <div class="panel-header">
-            <div class="panel-title"><h2>今日待办</h2><p>6 项任务，2 项需要尽快处理</p></div>
-            <button class="text-button">全部完成</button>
+            <div class="panel-title"><h2>${dashboardStats.scope === "own" ? "我的待办" : "今日待办"}</h2><p>${dashboardTodoEditing ? "编辑后会保存到当前登录账号" : todoDescription()}</p></div>
+            <button class="text-button edit-dashboard-todos">${dashboardTodoEditing ? "取消编辑" : `编辑待办 ${icon("edit")}`}</button>
           </div>
-          <div class="todo-list">
-            ${todoItem("确认程知远试听课", "与家长确认周六到店时间", "11:30", "#ff9f1c")}
-            ${todoItem("沈嘉树续费回访", "剩余 8 课时，已触发预警", "今天", "#ffd33d")}
-            ${todoItem("发布朗诵班课堂点评", "8 位学员等待教师反馈", "课后", "#715b87")}
-            ${todoItem("六月课时对账", "核对 6 月 1 日至 12 日记录", "明天", "#4f896f")}
-          </div>
+          ${dashboardTodoEditing ? dashboardTodoEditor(todoItems) : `<div class="todo-list">${todoItems.map(item => todoItem(item.title, item.description, item.time, item.color)).join("")}</div>`}
         </section>
         <section class="panel">
           <div class="panel-header">
-            <div class="panel-title"><h2>招生转化</h2><p>本月新增线索 42 条</p></div>
+            <div class="panel-title"><h2>招生转化</h2><p>全校可见 · 本月新增线索 ${Number(leadConversion.monthNew || 0)} 条</p></div>
             <button class="text-button" data-go="leads">进入跟进 ${icon("arrow")}</button>
           </div>
           <div class="funnel">
-            ${funnelRow("新增线索", 42, 100, "#ff9f1c")}
-            ${funnelRow("预约试听", 28, 67, "#ffb22e")}
-            ${funnelRow("完成试听", 21, 50, "#f47a12")}
-            ${funnelRow("成功报名", 18, 43, "#715b87")}
+            ${dashboardLeadFunnel()}
           </div>
         </section>
       </div>
@@ -385,30 +426,267 @@ function formatParentDate(value) {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-function metricCard(iconName, label, value, trend, color) {
-  return `<article class="metric-card ${color}">
+function metricCard(iconName, label, value, trend, color, targetPage = "") {
+  const actionAttrs = targetPage ? ` data-go="${targetPage}" role="button" tabindex="0" aria-label="查看${escapeHtml(label)}"` : "";
+  return `<article class="metric-card ${color}"${actionAttrs}>
     <div class="metric-top"><span class="metric-icon">${icon(iconName)}</span><span class="trend">${icon("trend")} ${trend}</span></div>
     <h3>${value}</h3><p>${label}</p>
   </article>`;
 }
 
-function classRow(item) {
-  return `<div class="class-row" style="--row-color:${item.color}">
-    <div class="class-time"><strong>${item.time}</strong><small>${item.duration}</small></div>
-    <div class="class-color"></div>
-    <div class="class-name"><strong>${item.name}</strong><small>${item.room}</small></div>
-    <div class="teacher"><span class="avatar">${item.teacherKey}</span>${item.teacher}</div>
-    <div class="capacity"><strong>${item.current} / ${item.max} 人</strong><div class="capacity-bar"><span style="width:${item.current / item.max * 100}%"></span></div></div>
-    <button class="row-action checkin" data-class="${item.name}" title="开始点名">${icon("chevron")}</button>
+function dashboardTodos(recentClasses, attendancePresent, attendanceTotal) {
+  const isOwnScope = dashboardStats.scope === "own";
+  const todos = [];
+  const nextClass = recentClasses[0];
+  if (nextClass) {
+    const title = `${isOwnScope ? "准备我的课程" : "确认近期课程"}：${nextClass.name || nextClass.course_name || "未命名班级"}`;
+    const dateLabel = nextClass.nextDate ? dashboardDateLabel(nextClass.nextDate) : "近期";
+    const roomLabel = nextClass.room_name ? `${nextClass.room_name}${nextClass.room_code ? ` ${nextClass.room_code}` : ""}` : "教室待确认";
+    todos.push({
+      title,
+      description: `${dateLabel} ${nextClass.start_time || ""} · ${nextClass.teacher_name || currentUser?.name || "老师"} · ${roomLabel}`,
+      time: nextClass.start_time || "近期",
+      color: nextClass.course_color || "#ff9f1c",
+    });
+  }
+  if (attendanceTotal > attendancePresent) {
+    todos.push({
+      title: isOwnScope ? "完成我的今日点名" : "核对今日点名进度",
+      description: `还有 ${attendanceTotal - attendancePresent} 人需要确认到课状态，点名后会自动消课。`,
+      time: "课后",
+      color: "#715b87",
+    });
+  }
+  if (Number(dashboardStats.renewalStudents || 0) > 0) {
+    todos.push({
+      title: `跟进 ${dashboardStats.renewalStudents} 名待续费学员`,
+      description: isOwnScope ? "仅统计当前账号授课范围内的学员。" : "来自当前可见范围，建议优先联系课时较低的家庭。",
+      time: "今天",
+      color: "#ffd33d",
+    });
+  }
+  if (Number(dashboardStats.activeStudents || 0) > 0) {
+    todos.push({
+      title: isOwnScope ? "更新我的课堂反馈" : "检查教师课后反馈",
+      description: `当前范围内有 ${dashboardStats.activeStudents} 名在读学员，保持课后反馈能提升续费稳定性。`,
+      time: "本周",
+      color: "#4f896f",
+    });
+  }
+  if (!todos.length) {
+    todos.push({
+      title: isOwnScope ? "完善我的授课信息" : "完善全校运营数据",
+      description: isOwnScope ? "当前账号暂无匹配课程或学员，可检查教师手机号与班级老师是否一致。" : "暂无紧急事项，可以继续维护课程、班级和招生线索。",
+      time: "待处理",
+      color: "#ff9f1c",
+    });
+  }
+  return todos.slice(0, 4);
+}
+
+function effectiveDashboardTodos(generatedTodos) {
+  const customTodos = dashboardStats.customTodos || [];
+  return customTodos.length ? customTodos.map(item => ({
+    title: item.title || "",
+    description: item.description || "",
+    time: item.time || item.time_label || "待处理",
+    color: item.color || "#ff9f1c",
+  })) : generatedTodos;
+}
+
+function todoDescription() {
+  if ((dashboardStats.customTodos || []).length) return "当前显示你手动维护的个人待办";
+  return dashboardStats.scope === "own" ? "围绕当前账号授课范围生成提醒" : "全校运营事项与跟进提醒";
+}
+
+function dashboardTodoEditor(todos) {
+  const rows = (todos.length ? todos : [{ title: "", description: "", time: "待处理", color: "#ff9f1c" }])
+    .map(dashboardTodoEditorRow)
+    .join("");
+  return `<form id="dashboardTodoForm" class="todo-editor-form">
+    <div class="todo-editor-list">${rows}</div>
+    <div class="todo-editor-actions">
+      <button type="button" class="secondary-button add-dashboard-todo">${icon("plus")} 添加待办</button>
+      <button type="button" class="secondary-button reset-dashboard-todos">恢复智能待办</button>
+      <button type="submit" class="primary-button" id="saveDashboardTodos">保存待办</button>
+    </div>
+  </form>`;
+}
+
+function dashboardTodoEditorRow(todo = {}) {
+  return `<div class="todo-editor-row">
+    <input name="title" required maxlength="60" placeholder="待办标题" value="${escapeHtml(todo.title || "")}" />
+    <input name="description" maxlength="160" placeholder="说明，例如：课后给家长反馈" value="${escapeHtml(todo.description || "")}" />
+    <input name="time" maxlength="20" placeholder="时间" value="${escapeHtml(todo.time || todo.time_label || "待处理")}" />
+    <input name="color" type="color" value="${escapeHtml(todo.color || "#ff9f1c")}" />
+    <button type="button" class="table-action danger remove-dashboard-todo" title="删除待办" aria-label="删除待办">${icon("trash")}</button>
   </div>`;
 }
 
+function collectDashboardTodoForm(form) {
+  return [...form.querySelectorAll(".todo-editor-row")].map(row => ({
+    title: row.querySelector('input[name="title"]')?.value.trim() || "",
+    description: row.querySelector('input[name="description"]')?.value.trim() || "",
+    time: row.querySelector('input[name="time"]')?.value.trim() || "待处理",
+    color: row.querySelector('input[name="color"]')?.value || "#ff9f1c",
+  })).filter(item => item.title);
+}
+
+function dashboardInsight(recentClasses, attendanceRate) {
+  const isOwnScope = dashboardStats.scope === "own";
+  if (isOwnScope && !recentClasses.length) {
+    return {
+      label: "教学观察 · MY SCOPE",
+      title: "当前账号还没有匹配到自己的近期课程。",
+      description: "请确认教师名单里的手机号、账号手机号和班级任课教师是否对应，匹配后这里会自动显示个人教学提醒。",
+    };
+  }
+  if (Number(dashboardStats.renewalStudents || 0) > 0) {
+    return {
+      label: isOwnScope ? "我的教学观察 · MY INSIGHT" : "教学观察 · WEEKLY INSIGHT",
+      title: `${isOwnScope ? "我的" : "当前范围内"}待续费学员有 ${dashboardStats.renewalStudents} 名。`,
+      description: "建议结合课堂表现、剩余课时和家长反馈安排回访，让续费沟通更自然。",
+    };
+  }
+  if (Number(dashboardStats.todayAttendanceTotal || 0) > 0) {
+    return {
+      label: isOwnScope ? "我的教学观察 · ATTENDANCE" : "教学观察 · ATTENDANCE",
+      title: `今日到课率 ${attendanceRate}%，点名数据已按当前账号范围统计。`,
+      description: "如果有请假或缺席，建议课后补充备注，方便前台和家长端同步查看。",
+    };
+  }
+  return {
+    label: isOwnScope ? "我的教学观察 · MY INSIGHT" : "教学观察 · WEEKLY INSIGHT",
+    title: `${isOwnScope ? "我的" : "当前范围内"}在读学员 ${dashboardStats.activeStudents || 0} 名，剩余课时 ${formatHours(dashboardStats.remainingHours)}。`,
+    description: "可以从近期课程进入课表，检查排课、点名和课时记录是否完整。",
+  };
+}
+
+function dashboardLeadFunnel() {
+  const data = dashboardStats.leadConversion || {};
+  const rows = [
+    ["新增线索", Number(data.new || 0), "#ff9f1c"],
+    ["已联系", Number(data.contacted || 0), "#ffb22e"],
+    ["预约试听", Number(data.trialScheduled || 0), "#f47a12"],
+    ["完成试听", Number(data.trialCompleted || 0), "#d7651d"],
+    ["成功报名", Number(data.enrolled || 0), "#715b87"],
+  ];
+  const max = Math.max(...rows.map(row => row[1]), 1);
+  return rows.map(([label, count, color]) => {
+    const percent = count > 0 ? Math.max(8, Math.round(count / max * 100)) : 0;
+    return funnelRow(label, count, percent, color);
+  }).join("");
+}
+
+function dashboardDateLabel(date) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(date);
+  target.setHours(0, 0, 0, 0);
+  const diff = Math.round((target - today) / 86400000);
+  if (diff === 0) return "今天";
+  if (diff === 1) return "明天";
+  if (diff > 1 && diff < 7) return `${diff} 天后`;
+  return `${target.getMonth() + 1}/${target.getDate()}`;
+}
+
+function dashboardRecentClasses() {
+  return (dashboardStats.recentClasses || [])
+    .map(item => ({ ...item, nextDate: findNextClassDate(item) }))
+    .filter(item => item.nextDate)
+    .sort((a, b) => {
+      const dateDiff = a.nextDate - b.nextDate;
+      return dateDiff || String(a.start_time).localeCompare(String(b.start_time)) || Number(a.id) - Number(b.id);
+    })
+    .slice(0, 4);
+}
+
+function renderTeacherCourseOverview() {
+  const overview = dashboardStats.teacherOverview || [];
+  if (!["owner", "academic"].includes(currentUser?.role) || !overview.length) return "";
+  return `<section class="panel teacher-overview-panel">
+    <div class="panel-header">
+      <div class="panel-title"><h2>教师课程总览</h2><p>${currentUser?.role === "owner" ? "校长可在这里看全体教师排课" : "教务可查看所有教师课程分布"}</p></div>
+      <button class="text-button" data-go="catalog">管理班级 ${icon("arrow")}</button>
+    </div>
+    <div class="teacher-overview-list">
+      ${overview.map(item => `<div class="teacher-overview-row" style="--teacher-color:${escapeHtml(item.color || "#ff9f1c")}">
+        <span class="avatar">${escapeHtml((item.display_name || "师")[0])}</span>
+        <div><strong>${escapeHtml(item.display_name)}</strong><small>${escapeHtml(item.specialty || "授课教师")}</small></div>
+        <b>${Number(item.class_count || 0)} 班</b>
+        <em>${Number(item.student_count || 0)} 学员</em>
+      </div>`).join("")}
+    </div>
+  </section>`;
+}
+
+function classRow(item) {
+  const courseName = item.course_name || item.name;
+  const title = item.name || courseName;
+  const startTime = item.start_time || item.time;
+  const dateLabel = item.nextDate ? `${item.nextDate.getMonth() + 1}/${item.nextDate.getDate()}` : "";
+  const durationLabel = item.duration ? `${item.duration} 分钟` : "";
+  const roomLabel = item.room_name ? `${item.room_name} · ${item.room_code || ""}` : item.room;
+  const teacherName = item.teacher_name || item.teacher || "";
+  const teacherKey = (teacherName || "师")[0];
+  const current = Number(item.current || 0);
+  const capacity = Number(item.capacity || item.max || 1);
+  const color = item.course_color || item.color || "#ff9f1c";
+  return `<div class="class-row" style="--row-color:${escapeHtml(color)}" data-dashboard-class-id="${item.id || ""}" data-dashboard-course="${escapeHtml(courseName)}" data-dashboard-time="${escapeHtml(startTime)}" role="button" tabindex="0" aria-label="查看${escapeHtml(title)}的课表位置">
+    <div class="class-time"><strong>${escapeHtml(startTime)}</strong><small>${escapeHtml(dateLabel || durationLabel)}</small></div>
+    <div class="class-color"></div>
+    <div class="class-name"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(roomLabel || courseName)} · ${escapeHtml(courseName)}</small></div>
+    <div class="teacher"><span class="avatar">${escapeHtml(teacherKey)}</span>${escapeHtml(teacherName)}</div>
+    <div class="capacity"><strong>${current} / ${capacity} 人</strong><div class="capacity-bar"><span style="width:${Math.min(100, current / capacity * 100)}%"></span></div></div>
+    <button class="row-action dashboard-course-jump" data-dashboard-class-id="${item.id || ""}" data-dashboard-course="${escapeHtml(courseName)}" data-dashboard-time="${escapeHtml(startTime)}" title="查看课表位置" aria-label="查看${escapeHtml(title)}在课表中的位置">${icon("chevron")}</button>
+  </div>`;
+}
+
+function findNextClassDate(item) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (let offset = 0; offset <= 370; offset += 1) {
+    const candidate = addDays(today, offset);
+    if (classOccursOnDate(item, candidate)) return candidate;
+  }
+  return null;
+}
+
+function findDashboardClass(courseName, startTime, classId = "") {
+  if (classId) {
+    const byId = catalog.classes.find(item => String(item.id) === String(classId));
+    if (byId) return byId;
+  }
+  const normalizedName = String(courseName || "").trim();
+  return catalog.classes.find(item => {
+    const sameTime = !startTime || item.start_time === startTime;
+    return sameTime && (item.course_name === normalizedName || item.name === normalizedName);
+  }) || catalog.classes.find(item => item.course_name === normalizedName || item.name === normalizedName);
+}
+
+async function jumpToScheduleCourse(courseName, startTime, classId = "") {
+  await loadCatalog();
+  const item = findDashboardClass(courseName, startTime, classId);
+  if (!item) {
+    await renderPage("schedule");
+    showToast(`没有找到「${courseName}」对应的班级`);
+    return;
+  }
+  const nextDate = findNextClassDate(item);
+  if (nextDate) {
+    activeWeekStart = startOfWeek(nextDate);
+    activeScheduleDay = weekdayIndexForDate(nextDate);
+  }
+  pendingScheduleFocusId = String(item.id);
+  await renderPage("schedule");
+}
+
 function todoItem(title, desc, time, color) {
-  return `<div class="todo-item" style="--todo-color:${color}"><span class="todo-dot"></span><div><strong>${title}</strong><p>${desc}</p></div><span class="todo-time">${time}</span></div>`;
+  return `<div class="todo-item" style="--todo-color:${escapeHtml(color)}"><span class="todo-dot"></span><div><strong>${escapeHtml(title)}</strong><p>${escapeHtml(desc)}</p></div><span class="todo-time">${escapeHtml(time)}</span></div>`;
 }
 
 function funnelRow(label, count, percent, color) {
-  return `<div class="funnel-row"><span>${label}</span><div class="funnel-bar" style="--bar-color:${color}"><span style="width:${percent}%"></span></div><b>${count}</b></div>`;
+  return `<div class="funnel-row"><span>${escapeHtml(label)}</span><div class="funnel-bar" style="--bar-color:${escapeHtml(color)}"><span style="width:${Math.max(0, Math.min(100, Number(percent) || 0))}%"></span></div><b>${Number(count || 0)}</b></div>`;
 }
 
 function renderStudents(query = "") {
@@ -444,12 +722,13 @@ function renderStudents(query = "") {
 }
 
 function renderCatalog() {
-  const activeClasses = catalog.classes.filter(item => ["招生中", "进行中"].includes(item.status));
-  const enrolled = new Set(catalog.classes.flatMap(item => item.students.map(student => student.id))).size;
+  const visibleClasses = visibleClassesForCurrentUser();
+  const activeClasses = visibleClasses.filter(item => ["招生中", "进行中"].includes(item.status));
+  const enrolled = new Set(visibleClasses.flatMap(item => item.students.map(student => student.id))).size;
   const canManageCatalog = can("catalog:write");
   pageContent.innerHTML = `
     <div class="section-toolbar">
-      <div><h2>课程与班级管理</h2><p>维护课程产品、开班信息和学员分班</p></div>
+      <div><h2>课程与班级管理</h2><p>${currentUser?.role === "teacher" ? "教师账号仅显示自己负责的班级" : "维护课程产品、开班信息和学员分班"}</p></div>
       ${canManageCatalog ? `<div class="toolbar-actions">
         <button class="secondary-button add-course">${icon("plus")} 新增课程</button>
         <button class="secondary-button add-teacher">${icon("plus")} 新增教师</button>
@@ -510,10 +789,11 @@ function renderCourseGrid() {
 }
 
 function renderClassGrid() {
-  if (!catalog.classes.length) return `<div class="empty-state">还没有班级</div>`;
+  const visibleClasses = visibleClassesForCurrentUser();
+  if (!visibleClasses.length) return `<div class="empty-state">${currentUser?.role === "teacher" ? "当前教师账号还没有匹配到负责班级，请让校长检查教师名单中的姓名或手机号。" : "还没有班级"}</div>`;
   const canManageCatalog = can("catalog:write");
   const canManageRoster = can("roster:write");
-  return `<div class="class-grid">${catalog.classes.map(item => {
+  return `<div class="class-grid">${visibleClasses.map(item => {
     const percent = Math.min(100, item.current / item.capacity * 100);
     return `<article class="class-card" style="--class-color:${escapeHtml(item.course_color)}">
       <div class="class-card-head">
@@ -600,11 +880,12 @@ function renderSchedule() {
   const weekDates = currentWeekDates();
   const activeDate = weekDates[activeScheduleDay];
   const activeDateValue = toDateInputValue(activeDate);
-  const activeClasses = catalog.classes
+  const scheduleClasses = visibleClassesForCurrentUser();
+  const activeClasses = scheduleClasses
     .filter(item => classOccursOnDate(item, activeDate))
     .sort((a, b) => a.start_time.localeCompare(b.start_time));
   const weeklyOccurrences = weekDates.reduce(
-    (sum, date) => sum + catalog.classes.filter(item => classOccursOnDate(item, date)).length,
+    (sum, date) => sum + scheduleClasses.filter(item => classOccursOnDate(item, date)).length,
     0,
   );
   const activeStudents = activeClasses.reduce((sum, item) => sum + Number(item.current || 0), 0);
@@ -623,7 +904,7 @@ function renderSchedule() {
     <div class="schedule-board">
       <div class="time-rail">${scheduleTimeSlots(activeClasses).map(t => `<div class="time-slot">${t}</div>`).join("")}</div>
       <div class="schedule-lane">
-        ${activeClasses.length ? activeClasses.map(item => `<article class="schedule-event" style="--event-color:${escapeHtml(item.course_color)}">
+        ${activeClasses.length ? activeClasses.map(item => `<article class="schedule-event ${String(item.id) === pendingScheduleFocusId ? "schedule-event-focus" : ""}" data-class-id="${item.id}" style="--event-color:${escapeHtml(item.course_color)}">
           <span class="color-pill"></span>
           <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.start_time)}-${escapeHtml(classEndTime(item))} · ${escapeHtml(item.room_name)} ${escapeHtml(item.room_code)} · ${escapeHtml(item.course_name)} · ${escapeHtml(item.start_date)} 至 ${escapeHtml(item.end_date)}</small></div>
           <div class="schedule-meta"><b>${escapeHtml(item.teacher_name)}</b>${item.current}/${item.capacity} 人<br>
@@ -633,6 +914,21 @@ function renderSchedule() {
         </article>`).join("") : `<div class="empty-state">这一天还没有排课，可以切换日期回溯/查看未来，或新建周期班级。</div>`}
       </div>
     </div>`;
+  focusPendingScheduleEvent();
+}
+
+function focusPendingScheduleEvent() {
+  if (!pendingScheduleFocusId) return;
+  const targetId = pendingScheduleFocusId;
+  window.setTimeout(() => {
+    const eventCard = document.querySelector(`.schedule-event[data-class-id="${targetId}"]`);
+    if (eventCard) {
+      eventCard.scrollIntoView({ behavior: "smooth", block: "center" });
+      eventCard.classList.add("schedule-event-focus");
+      window.setTimeout(() => eventCard.classList.remove("schedule-event-focus"), 2200);
+    }
+    pendingScheduleFocusId = "";
+  }, 120);
 }
 
 function renderAttendancePage() {
@@ -1262,6 +1558,8 @@ function renderSettings() {
 }
 
 function renderAccount() {
+  const teacherProfiles = currentUser?.role === "teacher" ? currentTeacherProfiles() : [];
+  const teacherProfile = teacherProfiles[0];
   pageContent.innerHTML = `
     <div class="account-settings-grid">
       <section class="panel account-profile-card">
@@ -1286,6 +1584,21 @@ function renderAccount() {
           <div class="account-form-actions"><button type="submit" class="primary-button" id="saveProfile">保存个人资料</button></div>
         </form>
       </section>
+      ${currentUser?.role === "teacher" ? `<section class="panel account-profile-card">
+        <div class="panel-header">
+          <div class="panel-title"><h2>我的教师简介</h2><p>${teacherProfile ? "会同步到教师名单、课时与课程展示中" : "未匹配到教师档案"}</p></div>
+        </div>
+        ${teacherProfile ? `<form id="teacherProfileForm" class="account-form">
+          <div class="profile-preview">
+            <span class="avatar avatar-manager large-avatar" style="--profile-color:${escapeHtml(teacherProfile.color || "#ff9f1c")}">${escapeHtml((teacherProfile.display_name || teacherProfile.name || "师")[0])}</span>
+            <div><strong>${escapeHtml(teacherProfile.display_name || teacherProfile.name)}</strong><small>${escapeHtml(teacherProfile.phone || currentUser.phone)} · 教师档案</small></div>
+          </div>
+          <label class="full"><span>教师简介 / 擅长方向</span><textarea name="specialty" rows="5" maxlength="300" placeholder="例如：少儿主持、朗诵表达、赛事辅导；也可以写教学风格和获奖经历。">${escapeHtml(teacherProfile.specialty || "")}</textarea></label>
+          <div class="account-form-actions"><button type="submit" class="primary-button" id="saveTeacherProfile">保存教师简介</button></div>
+        </form>` : `<div class="account-tips">
+          <div><strong>没有找到对应教师</strong><span>请让校长在“课程与班级 - 教师名单”里把教师姓名或手机号改成和当前账号一致。</span></div>
+        </div>`}
+      </section>` : ""}
       <section class="panel account-profile-card">
         <div class="panel-header">
           <div class="panel-title"><h2>修改密码</h2><p>建议首次登录后立即把初始密码 000000 改成自己的密码</p></div>
@@ -1352,6 +1665,7 @@ async function renderPage(page, query = "") {
       renderSettings();
     }
     if (page === "account") {
+      if (currentUser?.role === "teacher") await loadCatalog();
       renderAccount();
     }
     if (page === "schedule") {
@@ -1382,6 +1696,7 @@ async function renderPage(page, query = "") {
     renderConnectionError(error.message);
   }
   if (page === "teaching") renderPlaceholder(page);
+  animatePageContent();
   document.querySelector(".sidebar").classList.remove("open");
 }
 
@@ -1419,6 +1734,12 @@ function statusColor(status) {
 function renderConnectionError(message) {
   pageContent.innerHTML = `<div class="connection-error">${icon("settings")}<h2>暂时连接不到数据服务</h2><p>${escapeHtml(message)}<br>请运行 <code>python3 server.py</code>，然后访问 http://127.0.0.1:4173。</p><button class="primary-button" id="retryConnection">重新连接</button></div>`;
   document.querySelector("#retryConnection")?.addEventListener("click", () => renderPage(activePage));
+}
+
+function animatePageContent() {
+  pageContent.classList.remove("page-enter");
+  void pageContent.offsetWidth;
+  pageContent.classList.add("page-enter");
 }
 
 function syncStudentCourseOptions() {
@@ -1665,8 +1986,14 @@ document.addEventListener("click", async event => {
     }
   }
 
+  const dashboardCourse = event.target.closest(".dashboard-course-jump, .class-row[data-dashboard-course]");
+  if (dashboardCourse) {
+    await jumpToScheduleCourse(dashboardCourse.dataset.dashboardCourse, dashboardCourse.dataset.dashboardTime, dashboardCourse.dataset.dashboardClassId);
+    return;
+  }
+
   const go = event.target.closest("[data-go]");
-  if (go) renderPage(go.dataset.go);
+  if (go && !event.target.closest(".checkin")) renderPage(go.dataset.go);
 
   const checkin = event.target.closest(".checkin");
   if (checkin) showToast(`请到「班级课表」选择日期后为「${checkin.dataset.class}」点名`);
@@ -1841,6 +2168,46 @@ document.addEventListener("click", async event => {
   if (deleteUserButton) deleteUser(Number(deleteUserButton.dataset.id));
 
   if (event.target.closest(".cancel-user-edit")) resetUserForm();
+
+  if (event.target.closest(".edit-dashboard-todos")) {
+    dashboardTodoEditing = !dashboardTodoEditing;
+    renderDashboard();
+  }
+
+  if (event.target.closest(".add-dashboard-todo")) {
+    const list = document.querySelector(".todo-editor-list");
+    list?.insertAdjacentHTML("beforeend", dashboardTodoEditorRow({
+      title: "",
+      description: "",
+      time: "待处理",
+      color: COLORS_FOR_TODO_PICKER[list?.querySelectorAll(".todo-editor-row").length % COLORS_FOR_TODO_PICKER.length] || "#ff9f1c",
+    }));
+  }
+
+  const removeTodo = event.target.closest(".remove-dashboard-todo");
+  if (removeTodo) {
+    const rows = document.querySelectorAll(".todo-editor-row");
+    if (rows.length <= 1) {
+      showToast("至少保留一条待办，或使用“恢复智能待办”");
+      return;
+    }
+    removeTodo.closest(".todo-editor-row")?.remove();
+  }
+
+  if (event.target.closest(".reset-dashboard-todos")) {
+    try {
+      await api("/api/me/todos", {
+        method: "PUT",
+        body: JSON.stringify({ todos: [] }),
+      });
+      dashboardTodoEditing = false;
+      showToast("已恢复智能待办");
+      await loadDashboardStats();
+      renderDashboard();
+    } catch (error) {
+      showToast(error.message);
+    }
+  }
 });
 
 document.querySelector("#quickAdd").addEventListener("click", async () => {
@@ -2083,6 +2450,57 @@ document.addEventListener("submit", async event => {
     }
     return;
   }
+  if (event.target.id === "teacherProfileForm") {
+    event.preventDefault();
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    const button = document.querySelector("#saveTeacherProfile");
+    button.classList.add("button-loading");
+    button.textContent = "保存中...";
+    try {
+      await api("/api/me/teacher-profile", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+      await loadCatalog();
+      showToast("教师简介已更新");
+      renderAccount();
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.classList.remove("button-loading");
+      button.textContent = "保存教师简介";
+    }
+    return;
+  }
+  if (event.target.id === "dashboardTodoForm") {
+    event.preventDefault();
+    const form = event.target;
+    const todos = collectDashboardTodoForm(form);
+    if (!todos.length) {
+      showToast("请至少填写一条待办标题，或点击恢复智能待办");
+      return;
+    }
+    const button = document.querySelector("#saveDashboardTodos");
+    button.classList.add("button-loading");
+    button.textContent = "保存中...";
+    try {
+      const result = await api("/api/me/todos", {
+        method: "PUT",
+        body: JSON.stringify({ todos }),
+      });
+      dashboardStats.customTodos = result.todos || todos;
+      dashboardTodoEditing = false;
+      showToast("我的待办已保存");
+      renderDashboard();
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.classList.remove("button-loading");
+      button.textContent = "保存待办";
+    }
+    return;
+  }
   if (event.target.id === "passwordForm") {
     event.preventDefault();
     const form = event.target;
@@ -2274,6 +2692,17 @@ document.addEventListener("keydown", event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     document.querySelector("#globalSearch").focus();
+  }
+  const dashboardCourseAction = event.target.closest?.(".class-row[data-dashboard-course]");
+  if (dashboardCourseAction && ["Enter", " "].includes(event.key)) {
+    event.preventDefault();
+    jumpToScheduleCourse(dashboardCourseAction.dataset.dashboardCourse, dashboardCourseAction.dataset.dashboardTime, dashboardCourseAction.dataset.dashboardClassId);
+    return;
+  }
+  const jumpAction = event.target.closest?.(".metric-card[data-go]");
+  if (jumpAction && ["Enter", " "].includes(event.key)) {
+    event.preventDefault();
+    renderPage(jumpAction.dataset.go);
   }
   if (event.key === "Escape") {
     closeModal();
