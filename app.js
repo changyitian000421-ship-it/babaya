@@ -16,6 +16,7 @@ let activeWeekStart = startOfWeek(new Date());
 let activeScheduleDay = todayScheduleIndex();
 let pendingScheduleFocusId = "";
 let dashboardTodoEditing = false;
+let leadGoal = { completed: 18, target: 25, percent: 72 };
 let dashboardStats = {
   scope: "all",
   scopeLabel: "全校数据",
@@ -194,6 +195,11 @@ async function loadPayments() {
   payments = await api("/api/payments");
 }
 
+async function loadLeadGoal() {
+  leadGoal = await api("/api/lead-goal");
+  renderLeadGoalCard();
+}
+
 async function loadParentPortalData() {
   const start = toDateInputValue(new Date());
   const end = toDateInputValue(addDays(new Date(), 45));
@@ -238,6 +244,39 @@ function applyRoleUi() {
   avatar.innerHTML = currentUser?.avatarImage
     ? `<img src="${escapeHtml(currentUser.avatarImage)}" alt="${escapeHtml(currentUser.name)}" />`
     : escapeHtml(currentUser?.avatarText || (currentUser?.name || "声")[0]);
+  renderLeadGoalCard();
+}
+
+function canEditLeadGoal() {
+  return ["owner", "academic", "sales"].includes(currentUser?.role);
+}
+
+function renderLeadGoalCard(editing = false) {
+  const card = document.querySelector("#leadGoalCard");
+  if (!card) return;
+  const completed = Number(leadGoal.completed || 0);
+  const target = Math.max(1, Number(leadGoal.target || 25));
+  const percent = Math.max(0, Math.min(100, Math.round(completed / target * 100)));
+  card.classList.toggle("goal-editing", editing);
+  if (editing) {
+    card.innerHTML = `
+      <div class="sidebar-card-icon"><svg><use href="#icon-star"></use></svg></div>
+      <div class="sidebar-card-head"><strong>本月招生目标</strong><button class="goal-edit-button cancel-lead-goal" type="button" aria-label="取消编辑">取消</button></div>
+      <form id="leadGoalForm" class="goal-form">
+        <label><span>目标人数</span><input name="target" type="number" min="1" step="1" value="${target}" /></label>
+        <p>已完成 ${completed} 人，由本月已报名 / 已转正自动计算。</p>
+        <button type="submit" class="primary-button" id="saveLeadGoal">保存目标</button>
+      </form>`;
+    return;
+  }
+  card.innerHTML = `
+    <div class="sidebar-card-icon"><svg><use href="#icon-star"></use></svg></div>
+    <div class="sidebar-card-head">
+      <strong>本月招生目标</strong>
+      ${canEditLeadGoal() ? `<button class="goal-edit-button edit-lead-goal" type="button" aria-label="编辑本月招生目标"><svg><use href="#icon-edit"></use></svg></button>` : ""}
+    </div>
+    <div class="goal-line"><span>${completed} / ${target} 人</span><b>${percent}%</b></div>
+    <div class="progress"><span style="width:${percent}%"></span></div>`;
 }
 
 async function loadSession() {
@@ -277,6 +316,7 @@ async function handleLogin(event) {
     applyRoleUi();
     showApp();
     showToast(`欢迎回来，${currentUser.name}`);
+    await loadLeadGoal();
     await renderPage(allowedPages()[0] || "dashboard");
   } catch (error) {
     showToast(error.message);
@@ -2169,6 +2209,16 @@ document.addEventListener("click", async event => {
 
   if (event.target.closest(".cancel-user-edit")) resetUserForm();
 
+  if (event.target.closest(".edit-lead-goal")) {
+    renderLeadGoalCard(true);
+    return;
+  }
+
+  if (event.target.closest(".cancel-lead-goal")) {
+    renderLeadGoalCard(false);
+    return;
+  }
+
   if (event.target.closest(".edit-dashboard-todos")) {
     dashboardTodoEditing = !dashboardTodoEditing;
     renderDashboard();
@@ -2498,6 +2548,29 @@ document.addEventListener("submit", async event => {
     } finally {
       button.classList.remove("button-loading");
       button.textContent = "保存待办";
+    }
+    return;
+  }
+  if (event.target.id === "leadGoalForm") {
+    event.preventDefault();
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    data.target = Number(data.target);
+    const button = document.querySelector("#saveLeadGoal");
+    button.classList.add("button-loading");
+    button.textContent = "保存中...";
+    try {
+      leadGoal = await api("/api/lead-goal", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+      showToast("本月招生目标已更新");
+      renderLeadGoalCard(false);
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.classList.remove("button-loading");
+      button.textContent = "保存目标";
     }
     return;
   }
@@ -2846,6 +2919,8 @@ async function unenrollStudent(classId, studentId) {
 async function boot() {
   try {
     await loadSession();
+    if (currentUser?.role === "parent") return;
+    await loadLeadGoal();
     await renderPage(allowedPages()[0] || "dashboard");
   } catch (error) {
     currentUser = null;

@@ -565,6 +565,13 @@ def validate_teacher_profile(payload: dict) -> dict:
     return {"specialty": specialty}
 
 
+def validate_lead_goal(payload: dict) -> dict:
+    target = integer_value(payload, "target", "目标人数", 1)
+    if target > 100000:
+        raise ValueError("招生目标数字过大")
+    return {"target": target}
+
+
 def initialize_database() -> None:
     if DATABASE_KIND == "sqlite":
         DATABASE.parent.mkdir(parents=True, exist_ok=True)
@@ -815,6 +822,12 @@ def initialize_database() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_dashboard_todos_user ON dashboard_todos(user_id, position);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
             """
         db.executescript(postgres_schema(schema_sql) if DATABASE_KIND == "postgres" else schema_sql)
         ensure_user_schema(db)
@@ -1065,6 +1078,15 @@ def teacher_to_dict(row: sqlite3.Row) -> dict:
     return dict(row)
 
 
+def lead_goal_to_dict(completed: int, target: int) -> dict:
+    percent = round((completed / target) * 100) if target else 0
+    return {
+        "completed": completed,
+        "target": target,
+        "percent": max(0, min(100, percent)),
+    }
+
+
 def dashboard_todo_to_dict(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -1086,6 +1108,40 @@ def class_to_dict(row: sqlite3.Row, students: list[dict] | None = None) -> dict:
     item["current"] = len(item["students"]) if students is not None else int(item.get("current") or 0)
     item["end_time"] = minutes_to_time(time_minutes(item["start_time"], "开始时间") + int(item["duration"]))
     return item
+
+
+def get_app_setting(db: sqlite3.Connection, key: str, default: str) -> str:
+    row = db.execute("SELECT setting_value FROM app_settings WHERE setting_key = ?", (key,)).fetchone()
+    return row["setting_value"] if row else default
+
+
+def current_month_enrollment_count(db: sqlite3.Connection) -> int:
+    month_start = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+    lead_enrolled = db.execute(
+        """
+        SELECT COUNT(*) FROM leads
+        WHERE stage = '已报名' AND date(updated_at) >= ?
+        """,
+        (month_start,),
+    ).fetchone()[0]
+    trial_converted = db.execute(
+        """
+        SELECT COUNT(*) FROM trial_lessons tl
+        WHERE tl.status = '已转正'
+            AND date(tl.updated_at) >= ?
+            AND (
+                tl.lead_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM leads l
+                    WHERE l.id = tl.lead_id
+                        AND l.stage = '已报名'
+                        AND date(l.updated_at) >= ?
+                )
+            )
+        """,
+        (month_start, month_start),
+    ).fetchone()[0]
+    return int(lead_enrolled or 0) + int(trial_converted or 0)
 
 
 def minutes_to_time(total_minutes: int) -> str:
@@ -1817,6 +1873,43 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"teachers": [teacher_to_dict(row) for row in rows]})
 
+    def get_lead_goal(self) -> None:
+        with connect() as db:
+            target = int(get_app_setting(db, "lead_goal_target", "25") or 25)
+            completed = current_month_enrollment_count(db)
+        self.send_json(lead_goal_to_dict(completed, max(1, target)))
+
+    def update_lead_goal(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        if user["role"] not in {"owner", "academic", "sales"}:
+            self.send_error_json(HTTPStatus.FORBIDDEN, "当前角色不能编辑招生目标")
+            return
+        try:
+            data = validate_lead_goal(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                key = "lead_goal_target"
+                value = str(data["target"])
+                existing = db.execute("SELECT setting_key FROM app_settings WHERE setting_key = ?", (key,)).fetchone()
+                if existing:
+                    db.execute(
+                        "UPDATE app_settings SET setting_value = ?, updated_at = ? WHERE setting_key = ?",
+                        (value, now, key),
+                    )
+                else:
+                    db.execute(
+                        "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
+                        (key, value, now),
+                    )
+                completed = current_month_enrollment_count(db)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(lead_goal_to_dict(completed, data["target"]))
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
@@ -1869,6 +1962,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("dashboard:read"):
                 return
             self.get_dashboard()
+            return
+        if parsed.path == "/api/lead-goal":
+            if not self.require_permission("dashboard:read"):
+                return
+            self.get_lead_goal()
             return
         if parsed.path == "/api/hour-transactions":
             if not self.require_permission("hours:read"):
@@ -2306,6 +2404,9 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/me/teacher-profile":
             self.update_own_teacher_profile()
+            return
+        if path == "/api/lead-goal":
+            self.update_lead_goal()
             return
         parts = path.strip("/").split("/")
         if len(parts) != 3 or parts[0] != "api":

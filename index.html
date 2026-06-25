@@ -19,15 +19,8 @@
         <div class="login-logo-wrap">
           <img class="login-logo" src="./assets/babaya-logo-full.png" alt="芭芭鸭语言艺术培训中心" />
         </div>
-        <div class="brand login-brand">
-          <img class="brand-logo" src="./assets/babaya-duck-mark.png" alt="" aria-hidden="true" />
-          <div>
-            <strong>芭芭鸭</strong>
-            <small>语言艺术培训中心</small>
-          </div>
-        </div>
-        <h1>进入芭芭鸭教培系统</h1>
-        <p>把课程、学员、班级和老师都装进一个轻快好用的工作台。</p>
+        <h1>登录芭芭鸭教培系统</h1>
+        <p>课程、学员、班级和老师，都在一个轻快好用的工作台里。</p>
         <form id="loginForm" class="login-form">
           <label><span>手机号</span><input name="phone" autocomplete="username" required placeholder="例如：13800000001" /></label>
           <label><span>密码</span><input name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" /></label>
@@ -110,11 +103,14 @@
           </button>
         </nav>
 
-        <div class="sidebar-card">
+        <div class="sidebar-card" id="leadGoalCard">
           <div class="sidebar-card-icon"><svg><use href="#icon-star"></use></svg></div>
-          <strong>本月招生目标</strong>
-          <div class="goal-line"><span>18 / 25 人</span><b>72%</b></div>
-          <div class="progress"><span style="width: 72%"></span></div>
+          <div class="sidebar-card-head">
+            <strong>本月招生目标</strong>
+            <button class="goal-edit-button" type="button" aria-label="编辑本月招生目标"><svg><use href="#icon-edit"></use></svg></button>
+          </div>
+          <div class="goal-line"><span id="leadGoalText">18 / 25 人</span><b id="leadGoalPercent">72%</b></div>
+          <div class="progress"><span id="leadGoalProgress" style="width: 72%"></span></div>
         </div>
 
         <div class="profile">
