@@ -4,7 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="芭芭鸭语言艺术培训中心教培管理系统" />
+    <meta name="theme-color" content="#ff9f1c" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="芭芭鸭" />
     <title>芭芭鸭 · 语言艺术培训中心</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./assets/babaya-apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -95,11 +101,8 @@
             <svg><use href="#icon-book"></use></svg><span>教学中心</span>
           </button>
           <div class="nav-divider"></div>
-          <button class="nav-item" data-page="account">
-            <svg><use href="#icon-users"></use></svg><span>个人设置</span>
-          </button>
           <button class="nav-item" data-page="settings">
-            <svg><use href="#icon-settings"></use></svg><span>系统设置</span>
+            <svg><use href="#icon-settings"></use></svg><span>设置</span>
           </button>
         </nav>
 
@@ -137,6 +140,9 @@
             </label>
             <button class="icon-button notification" aria-label="消息通知">
               <svg><use href="#icon-bell"></use></svg><span></span>
+            </button>
+            <button class="icon-button install-shortcut" id="installAppShortcut" aria-label="安装到设备" title="安装到桌面或主屏幕">
+              <svg><use href="#icon-download"></use></svg>
             </button>
             <button class="primary-button" id="quickAdd" aria-label="新增学员">
               <svg><use href="#icon-plus"></use></svg><span>新增学员</span>
@@ -334,6 +340,7 @@
       <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
       <symbol id="icon-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M14 21h-4"/></symbol>
       <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"/></symbol>
       <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
       <symbol id="icon-trend" viewBox="0 0 24 24"><path d="m3 17 6-6 4 4 8-9"/><path d="M15 6h6v6"/></symbol>
       <symbol id="icon-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.85.29 1.73.5 2.63.62A2 2 0 0 1 22 16.92Z"/></symbol>

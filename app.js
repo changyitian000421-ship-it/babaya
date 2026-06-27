@@ -16,6 +16,8 @@ let activeWeekStart = startOfWeek(new Date());
 let activeScheduleDay = todayScheduleIndex();
 let pendingScheduleFocusId = "";
 let dashboardTodoEditing = false;
+let activeSettingsSection = "root";
+let deferredInstallPrompt = null;
 let leadGoal = { completed: 18, target: 25, percent: 72 };
 let dashboardStats = {
   scope: "all",
@@ -72,6 +74,8 @@ const liquidInteractiveSelector = [
   ".table-action",
   ".phone-button",
   ".schedule-event",
+  ".settings-entry",
+  ".settings-back-button",
 ].join(",");
 
 const pageMeta = {
@@ -85,16 +89,15 @@ const pageMeta = {
   payments: ["财务管理", "缴费续费"],
   hours: ["财务与课消", "课时管理"],
   teaching: ["教学管理", "教学中心"],
-  account: ["个人中心", "账号设置"],
-  settings: ["系统配置", "系统设置"],
+  settings: ["系统中心", "设置"],
 };
 
 const rolePages = {
-  owner: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "payments", "hours", "teaching", "account", "settings"],
-  academic: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "payments", "hours", "teaching", "account"],
-  teacher: ["dashboard", "schedule", "attendance", "trials", "hours", "leads", "teaching", "students", "catalog", "account"],
-  sales: ["dashboard", "leads", "trials", "students", "account"],
-  finance: ["dashboard", "payments", "hours", "leads", "students", "account"],
+  owner: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "payments", "hours", "teaching", "settings"],
+  academic: ["dashboard", "students", "catalog", "schedule", "attendance", "leads", "trials", "payments", "hours", "teaching", "settings"],
+  teacher: ["dashboard", "schedule", "attendance", "trials", "hours", "leads", "teaching", "students", "catalog", "settings"],
+  sales: ["dashboard", "leads", "trials", "students", "settings"],
+  finance: ["dashboard", "payments", "hours", "leads", "students", "settings"],
 };
 
 const roleOptions = [
@@ -1584,8 +1587,8 @@ function renderPlaceholder(type) {
   pageContent.innerHTML = `<div class="placeholder-page"><div>${icon("book")}<h2>教学中心</h2><p>教案、作业、作品集与成长评价将在第二阶段开放</p></div></div>`;
 }
 
-function renderSettings() {
-  pageContent.innerHTML = `
+function staffSettingsMarkup() {
+  return `
     <div class="section-toolbar">
       <div><h2>员工账号与角色</h2><p>员工统一使用手机号登录；只有校长可以添加账号和分配角色</p></div>
       <span class="readonly-badge">校长专属</span>
@@ -1600,7 +1603,7 @@ function renderSettings() {
           <label><span>登录手机号</span><input name="phone" required placeholder="例如：13800000006" /></label>
           <label><span>员工姓名</span><input name="name" required placeholder="例如：王老师" /></label>
           <label><span>角色</span><select name="role">${roleOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
-          <div class="account-default-password"><strong>初始密码：000000</strong><span>新员工首次登录后可在个人设置中修改密码。</span></div>
+          <div class="account-default-password"><strong>初始密码：000000</strong><span>新员工首次登录后可在“设置 - 账号与安全”中修改密码。</span></div>
           <div class="account-form-actions">
             <button type="button" class="secondary-button cancel-user-edit" hidden>取消编辑</button>
             <button type="submit" class="primary-button" id="saveUser">保存账号</button>
@@ -1622,15 +1625,31 @@ function renderSettings() {
           </tr>`).join("")}</tbody>
         </table>
       </section>
+      <section class="staff-mobile-list" aria-label="员工账号列表">
+        ${users.map(user => `<article class="staff-mobile-card">
+          <div class="staff-mobile-head">
+            <div class="student-cell" style="--student-color:${escapeHtml(user.avatarColor || "#ff9f1c")}">${avatarMarkup(user)}<div><strong>${escapeHtml(user.name)}</strong><small>ID ${user.id}</small></div></div>
+            <span class="tag" style="--tag-color:#715b87">${escapeHtml(user.roleLabel)}</span>
+          </div>
+          <div class="staff-mobile-details">
+            <div><span>登录手机号</span><strong>${escapeHtml(user.phone)}</strong></div>
+            <div><span>权限范围</span><strong>${permissionSummary(user.role)}</strong></div>
+          </div>
+          <div class="staff-mobile-actions">
+            <button class="secondary-button edit-user" data-id="${user.id}">${icon("edit")}<span>编辑账号</span></button>
+            <button class="secondary-button danger delete-user" data-id="${user.id}" ${currentUser?.id === user.id ? "disabled" : ""}>${icon("trash")}<span>${currentUser?.id === user.id ? "当前账号" : "停用账号"}</span></button>
+          </div>
+        </article>`).join("")}
+      </section>
     </div>`;
 }
 
-function renderAccount() {
+function accountSettingsMarkup() {
   const teacherProfiles = currentUser?.role === "teacher" ? currentTeacherProfiles() : [];
   const teacherProfile = teacherProfiles[0];
-  pageContent.innerHTML = `
+  return `
     <div class="account-settings-grid">
-      <section class="panel account-profile-card">
+      <section class="panel account-profile-card" data-settings-panel="profile">
         <div class="panel-header">
           <div class="panel-title"><h2>个人资料</h2><p>修改自己的登录手机号、显示名称和头像样式</p></div>
         </div>
@@ -1652,7 +1671,7 @@ function renderAccount() {
           <div class="account-form-actions"><button type="submit" class="primary-button" id="saveProfile">保存个人资料</button></div>
         </form>
       </section>
-      ${currentUser?.role === "teacher" ? `<section class="panel account-profile-card">
+      ${currentUser?.role === "teacher" ? `<section class="panel account-profile-card" data-settings-panel="teacher">
         <div class="panel-header">
           <div class="panel-title"><h2>我的教师简介</h2><p>${teacherProfile ? "会同步到教师名单、课时与课程展示中" : "未匹配到教师档案"}</p></div>
         </div>
@@ -1667,7 +1686,7 @@ function renderAccount() {
           <div><strong>没有找到对应教师</strong><span>请让校长在“课程与班级 - 教师名单”里把教师姓名或手机号改成和当前账号一致。</span></div>
         </div>`}
       </section>` : ""}
-      <section class="panel account-profile-card">
+      <section class="panel account-profile-card" data-settings-panel="security">
         <div class="panel-header">
           <div class="panel-title"><h2>修改密码</h2><p>建议首次登录后立即把初始密码 000000 改成自己的密码</p></div>
         </div>
@@ -1678,16 +1697,203 @@ function renderAccount() {
           <div class="account-form-actions"><button type="submit" class="primary-button" id="savePassword">更新密码</button></div>
         </form>
       </section>
-      <section class="panel account-tips-card">
+      <section class="panel account-tips-card" data-settings-panel="help">
         <div class="panel-header">
           <div class="panel-title"><h2>实用提醒</h2><p>这些小功能能减少日常使用时的麻烦</p></div>
         </div>
         <div class="account-tips">
           <div><strong>手机号就是登录账号</strong><span>如果更换手机号，下次登录请使用新手机号。</span></div>
           <div><strong>头像会同步到左下角</strong><span>可以用姓名首字、岗位简称或昵称，方便多人共用设备时识别。</span></div>
-          <div><strong>忘记密码</strong><span>请让校长在“系统设置”里编辑员工账号并重置密码，或先临时创建新账号。</span></div>
+          <div><strong>忘记密码</strong><span>请让校长在“设置 - 员工与权限”里处理账号，或先临时创建新账号。</span></div>
         </div>
       </section>
+    </div>`;
+}
+
+function availableSettingsSections() {
+  const sections = [
+    { id: "profile", group: "账户", icon: "users", title: "个人资料", description: "姓名、手机号与头像" },
+    { id: "security", group: "账户", icon: "settings", title: "账号与安全", description: "修改登录密码" },
+  ];
+  if (currentUser?.role === "teacher") {
+    sections.push({ id: "teacher", group: "教学", icon: "book", title: "教师档案", description: "简介与擅长方向" });
+  }
+  if (currentUser?.role === "owner") {
+    sections.push({ id: "staff", group: "机构管理", icon: "layers", title: "员工与权限", description: "账号、角色与初始密码" });
+  }
+  sections.push({ id: "install", group: "应用", icon: "download", title: "安装到设备", description: "保存到桌面或手机主屏幕" });
+  sections.push(
+    { id: "help", group: "支持", icon: "spark", title: "使用帮助", description: "登录与日常使用提醒" },
+    { id: "about", group: "支持", icon: "star", title: "关于芭芭鸭", description: "系统信息与数据说明" },
+  );
+  return sections;
+}
+
+function accountSettingsPanels() {
+  const container = document.createElement("div");
+  container.innerHTML = accountSettingsMarkup();
+  return Object.fromEntries(
+    [...container.querySelectorAll("[data-settings-panel]")]
+      .map(panel => [panel.dataset.settingsPanel, panel.outerHTML]),
+  );
+}
+
+function settingsAboutMarkup() {
+  return `<section class="panel account-profile-card settings-about-card">
+    <div class="panel-header">
+      <div class="panel-title"><h2>关于芭芭鸭教培系统</h2><p>语言艺术培训中心的一体化运营工作台</p></div>
+    </div>
+    <div class="settings-about-content">
+      <div class="settings-about-logo"><img src="./assets/babaya-logo-full.png" alt="芭芭鸭语言艺术培训中心" /></div>
+      <div class="settings-info-list">
+        <div><span>系统名称</span><strong>芭芭鸭教培系统</strong></div>
+        <div><span>当前版本</span><strong>第一版</strong></div>
+        <div><span>数据存储</span><strong>云端数据库与本地开发环境</strong></div>
+        <div><span>当前账号</span><strong>${escapeHtml(currentUser?.name || "")} · ${escapeHtml(currentUser?.roleLabel || "")}</strong></div>
+      </div>
+    </div>
+  </section>`;
+}
+
+function installEnvironment() {
+  const userAgent = navigator.userAgent || "";
+  const isIos = /iPhone|iPad|iPod/i.test(userAgent);
+  const isAndroid = /Android/i.test(userAgent);
+  const isWindows = /Windows/i.test(userAgent);
+  const isMac = /Macintosh|Mac OS X/i.test(userAgent) && !isIos;
+  const isStandalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  return { isIos, isAndroid, isWindows, isMac, isStandalone };
+}
+
+function installGuide() {
+  const environment = installEnvironment();
+  if (environment.isIos) {
+    return {
+      platform: "苹果 iPhone / iPad",
+      note: "苹果系统不允许网页直接完成安装，需要在 Safari 中确认添加。",
+      steps: ["使用 Safari 打开当前网址", "点击底部工具栏的“分享”按钮", "选择“添加到主屏幕”，再点击“添加”"],
+    };
+  }
+  if (environment.isAndroid) {
+    return {
+      platform: "安卓手机 / 平板",
+      note: "推荐使用 Chrome、Edge 或系统浏览器安装。",
+      steps: ["点击下方“立即安装”", "在浏览器弹窗中确认安装", "安装后从桌面图标打开芭芭鸭"],
+    };
+  }
+  if (environment.isWindows) {
+    return {
+      platform: "Windows 电脑",
+      note: "推荐使用 Chrome 或 Edge，可像普通应用一样固定到桌面和开始菜单。",
+      steps: ["点击下方“立即安装”", "在浏览器弹窗中点击“安装”", "从桌面或开始菜单打开芭芭鸭"],
+    };
+  }
+  if (environment.isMac) {
+    return {
+      platform: "苹果 Mac",
+      note: "Chrome 可直接安装；Safari 可使用“文件 - 添加到程序坞”。",
+      steps: ["点击下方“立即安装”", "如果没有弹窗，请打开浏览器的文件或更多菜单", "选择“添加到程序坞”或“安装应用”"],
+    };
+  }
+  return {
+    platform: "当前设备",
+    note: "支持 PWA 的浏览器可将系统安装到桌面或主屏幕。",
+    steps: ["点击下方“立即安装”", "如果没有弹窗，请打开浏览器菜单", "选择“安装应用”或“添加到主屏幕”"],
+  };
+}
+
+function settingsInstallMarkup() {
+  const environment = installEnvironment();
+  const guide = installGuide();
+  const directInstall = Boolean(deferredInstallPrompt);
+  const buttonLabel = environment.isStandalone ? "已经安装" : directInstall ? "立即安装" : environment.isIos ? "查看苹果安装步骤" : "检查安装方式";
+  return `<section class="panel account-profile-card install-app-card">
+    <div class="panel-header">
+      <div class="panel-title"><h2>安装芭芭鸭到设备</h2><p>安装后可从桌面或主屏幕直接打开，体验更接近独立应用</p></div>
+    </div>
+    <div class="install-app-content">
+      <div class="install-app-hero">
+        <img src="./assets/babaya-app-icon-192.png" alt="芭芭鸭应用图标" />
+        <div><span>${escapeHtml(guide.platform)}</span><h3>${environment.isStandalone ? "芭芭鸭已安装" : "把芭芭鸭放到桌面"}</h3><p>${escapeHtml(guide.note)}</p></div>
+      </div>
+      <button type="button" class="primary-button install-app-button" id="installSettingsButton" ${environment.isStandalone ? "disabled" : ""}>${icon("download")}<span>${buttonLabel}</span></button>
+      <div class="install-guide-list">
+        ${guide.steps.map((step, index) => `<div><b>${index + 1}</b><span>${escapeHtml(step)}</span></div>`).join("")}
+      </div>
+      <p class="install-security-note">安装不会复制机构数据；登录信息和业务数据仍由当前网站安全管理。</p>
+    </div>
+  </section>`;
+}
+
+async function requestAppInstall() {
+  const environment = installEnvironment();
+  if (environment.isStandalone) {
+    showToast("芭芭鸭已经安装在当前设备上");
+    return;
+  }
+  if (deferredInstallPrompt) {
+    const promptEvent = deferredInstallPrompt;
+    deferredInstallPrompt = null;
+    await promptEvent.prompt();
+    const choice = await promptEvent.userChoice;
+    showToast(choice.outcome === "accepted" ? "安装已开始" : "已取消安装");
+    if (activePage === "settings" && activeSettingsSection === "install") renderSettingsHub("install");
+    return;
+  }
+  activeSettingsSection = "install";
+  if (activePage === "settings") renderSettingsHub("install");
+  else await renderPage("settings");
+  showToast(environment.isIos ? "请按照页面步骤添加到主屏幕" : "请按照页面提示或浏览器菜单完成安装");
+}
+
+function settingsIndexMarkup(sections) {
+  const groups = [...new Set(sections.map(item => item.group))];
+  return `<section class="settings-index panel">
+    <div class="settings-user-card">
+      ${avatarMarkup(currentUser, "large-avatar")}
+      <div><strong>${escapeHtml(currentUser.name)}</strong><small>${escapeHtml(currentUser.roleLabel)} · ${escapeHtml(currentUser.phone)}</small></div>
+    </div>
+    <div class="settings-index-groups">
+      ${groups.map(group => `<div class="settings-index-group">
+        <span class="settings-group-title">${escapeHtml(group)}</span>
+        <div class="settings-group-list">
+          ${sections.filter(item => item.group === group).map(item => `<button type="button" class="settings-entry" data-settings-section="${item.id}">
+            <span class="settings-entry-icon">${icon(item.icon)}</span>
+            <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.description)}</small></span>
+            ${icon("chevron")}
+          </button>`).join("")}
+        </div>
+      </div>`).join("")}
+    </div>
+  </section>`;
+}
+
+function renderSettingsHub(section = activeSettingsSection) {
+  const sections = availableSettingsSections();
+  if (section !== "root" && !sections.some(item => item.id === section)) section = "root";
+  activeSettingsSection = section;
+  if (section === "root") {
+    pageContent.innerHTML = `<div class="settings-root-page">${settingsIndexMarkup(sections)}</div>`;
+    return;
+  }
+
+  const currentSection = sections.find(item => item.id === section);
+  const accountPanels = accountSettingsPanels();
+  let detail = accountPanels[section] || "";
+  if (section === "staff") detail = staffSettingsMarkup();
+  if (section === "install") detail = settingsInstallMarkup();
+  if (section === "about") detail = settingsAboutMarkup();
+
+  pageContent.innerHTML = `
+    <div class="settings-detail-page">
+      <div class="settings-detail-nav">
+        <button type="button" class="settings-back-button" data-settings-back>${icon("chevron")}<span>设置</span></button>
+        <div class="settings-detail-heading">
+          <span class="settings-entry-icon">${icon(currentSection.icon)}</span>
+          <div><h2>${escapeHtml(currentSection.title)}</h2><p>${escapeHtml(currentSection.description)}</p></div>
+        </div>
+      </div>
+      <div class="settings-detail">${detail}</div>
     </div>`;
 }
 
@@ -1729,12 +1935,11 @@ async function renderPage(page, query = "") {
       renderCatalog();
     }
     if (page === "settings") {
-      await loadUsers();
-      renderSettings();
-    }
-    if (page === "account") {
-      if (currentUser?.role === "teacher") await loadCatalog();
-      renderAccount();
+      const loaders = [];
+      if (currentUser?.role === "owner") loaders.push(loadUsers());
+      if (currentUser?.role === "teacher") loaders.push(loadCatalog());
+      if (loaders.length) await Promise.all(loaders);
+      renderSettingsHub();
     }
     if (page === "schedule") {
       await Promise.all([loadCatalog(), loadStudents()]);
@@ -2059,11 +2264,33 @@ function closeAttendance() {
 }
 
 document.addEventListener("click", async event => {
+  if (event.target.closest("#installAppShortcut, #installSettingsButton")) {
+    await requestAppInstall();
+    return;
+  }
+
   const nav = event.target.closest(".nav-item");
-  if (nav && canOpenPage(nav.dataset.page)) renderPage(nav.dataset.page);
+  if (nav && canOpenPage(nav.dataset.page)) {
+    if (nav.dataset.page === "settings") activeSettingsSection = "root";
+    renderPage(nav.dataset.page);
+  }
 
   const profile = event.target.closest(".profile");
-  if (profile && !event.target.closest("#logoutButton") && canOpenPage("account")) renderPage("account");
+  if (profile && !event.target.closest("#logoutButton") && canOpenPage("settings")) {
+    activeSettingsSection = "profile";
+    renderPage("settings");
+  }
+
+  if (event.target.closest("[data-settings-back]")) {
+    renderSettingsHub("root");
+    return;
+  }
+
+  const settingsEntry = event.target.closest("[data-settings-section]");
+  if (settingsEntry) {
+    renderSettingsHub(settingsEntry.dataset.settingsSection);
+    return;
+  }
 
   const removeAvatar = event.target.closest(".remove-avatar-image");
   if (removeAvatar) {
@@ -2328,6 +2555,24 @@ document.addEventListener("pointerout", event => {
   if (target && !target.contains(event.relatedTarget)) resetLiquidPointer(target);
 }, { passive: true });
 
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  document.querySelector("#installAppShortcut")?.classList.add("install-ready");
+  if (activePage === "settings" && activeSettingsSection === "install") renderSettingsHub("install");
+});
+
+window.addEventListener("appinstalled", () => {
+  deferredInstallPrompt = null;
+  document.querySelector("#installAppShortcut")?.classList.remove("install-ready");
+  showToast("芭芭鸭已安装到当前设备");
+  if (activePage === "settings" && activeSettingsSection === "install") renderSettingsHub("install");
+});
+
+if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
+  navigator.serviceWorker.register("/sw.js").catch(error => console.warn("Service Worker 注册失败", error));
+}
+
 document.querySelector("#quickAdd").addEventListener("click", async () => {
   if (!can("students:write")) {
     showToast("当前角色不能新增学员");
@@ -2559,7 +2804,7 @@ document.addEventListener("submit", async event => {
       currentUser = result.user;
       applyRoleUi();
       showToast("个人资料已更新");
-      renderAccount();
+      renderSettingsHub("profile");
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -2582,7 +2827,7 @@ document.addEventListener("submit", async event => {
       });
       await loadCatalog();
       showToast("教师简介已更新");
-      renderAccount();
+      renderSettingsHub("teacher");
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -2751,7 +2996,7 @@ document.addEventListener("submit", async event => {
     });
     showToast(userId ? "员工账号已更新" : "员工账号已创建");
     await loadUsers();
-    renderSettings();
+    renderSettingsHub("staff");
   } catch (error) {
     showToast(error.message);
   } finally {
@@ -2950,7 +3195,7 @@ async function deleteUser(userId) {
     await api(`/api/users/${userId}`, { method: "DELETE" });
     showToast(`员工 ${user.name} 已停用`);
     await loadUsers();
-    renderSettings();
+    renderSettingsHub("staff");
   } catch (error) {
     showToast(error.message);
   }
