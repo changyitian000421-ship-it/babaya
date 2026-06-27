@@ -21,6 +21,9 @@
   --glass-line-warm: rgba(255, 205, 112, .32);
   --glass-shadow: 0 24px 70px rgba(118, 76, 22, .14), 0 8px 24px rgba(255, 255, 255, .34) inset;
   --glass-shadow-hover: 0 34px 90px rgba(244, 122, 18, .18), 0 10px 28px rgba(255, 255, 255, .42) inset;
+  --glass-edge: rgba(255, 255, 255, .86);
+  --glass-glow: rgba(255, 217, 94, .24);
+  --glass-specular: rgba(255, 255, 255, .92);
   --duck-shadow: 0 22px 60px rgba(239, 112, 21, 0.14);
   --shadow: 0 18px 50px rgba(123, 80, 24, 0.10);
   --ios-shadow: 0 18px 48px rgba(81, 54, 16, .12), 0 3px 10px rgba(81, 54, 16, .05);
@@ -1097,6 +1100,143 @@ body {
   line-height: 1.65;
 }
 
+/* Liquid depth: stronger glass, pointer light and iOS-like spring feedback */
+.panel, .metric-card, .table-card, .summary-card, .course-card, .class-card, .resource-card,
+.trial-card, .teacher-hours-card, .attendance-class-card, .settings-card, .account-profile-card,
+.catalog-stat, .parent-metrics div, .parent-student-card, .lead-card, .modal, .login-card,
+.sidebar-card, .schedule-event, .nav-item, .primary-button, .secondary-button, .icon-button,
+.day-button, .catalog-tab, .row-action, .table-action, .phone-button {
+  --mx: 50%;
+  --my: 18%;
+  --tilt-x: 0deg;
+  --tilt-y: 0deg;
+  transform-style: preserve-3d;
+  will-change: transform, box-shadow, border-color, background;
+}
+.metric-card, .panel, .table-card, .summary-card, .course-card, .class-card, .resource-card,
+.trial-card, .teacher-hours-card, .attendance-class-card, .settings-card, .account-profile-card,
+.catalog-stat, .parent-student-card, .lead-card, .schedule-event {
+  animation-fill-mode: backwards;
+}
+.panel, .metric-card, .table-card, .summary-card, .course-card, .class-card, .resource-card,
+.trial-card, .teacher-hours-card, .attendance-class-card, .settings-card, .account-profile-card,
+.catalog-stat, .parent-metrics div, .parent-student-card, .lead-card, .modal, .login-card {
+  border-color: rgba(255,255,255,.86);
+  background:
+    radial-gradient(circle at var(--mx) var(--my), rgba(255,255,255,.72), transparent 26%),
+    linear-gradient(145deg, rgba(255,255,255,.76), rgba(255,246,221,.38) 58%, rgba(255,255,255,.50)),
+    rgba(255,255,255,.52);
+  box-shadow:
+    0 30px 84px rgba(132, 82, 14, .14),
+    0 14px 32px rgba(255, 164, 36, .08),
+    inset 0 1px rgba(255,255,255,.92),
+    inset 0 -1px rgba(255, 196, 89, .20);
+  -webkit-backdrop-filter: blur(24px) saturate(1.28) brightness(1.04);
+  backdrop-filter: blur(24px) saturate(1.28) brightness(1.04);
+}
+.panel::before, .metric-card::before, .table-card::before, .summary-card::before,
+.class-card::before, .teacher-hours-card::before, .attendance-class-card::before,
+.settings-card::before, .account-profile-card::before, .catalog-stat::before,
+.lead-card::before, .modal::before, .login-card::before,
+.course-card::after, .resource-card::after, .trial-card::after {
+  background:
+    radial-gradient(circle at var(--mx) var(--my), var(--glass-specular), rgba(255,255,255,.36) 12%, transparent 32%),
+    linear-gradient(118deg, rgba(255,255,255,.60), transparent 34%),
+    linear-gradient(300deg, rgba(255, 198, 91, .16), transparent 48%);
+  opacity: .72;
+  transition: opacity .42s var(--spring), background .42s var(--spring);
+}
+.panel::after, .metric-card::before, .table-card::after, .summary-card::after,
+.class-card::after, .teacher-hours-card::after, .attendance-class-card::after,
+.settings-card::after, .account-profile-card::after, .catalog-stat::after,
+.lead-card::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow:
+    inset 1px 1px rgba(255,255,255,.58),
+    inset -1px -1px rgba(255, 170, 58, .10);
+  opacity: .75;
+}
+.primary-button, .secondary-button, .icon-button, .day-button, .catalog-tab, .row-action,
+.table-action, .phone-button, .nav-item, .sidebar-card, .schedule-event {
+  position: relative;
+  overflow: hidden;
+  -webkit-backdrop-filter: blur(20px) saturate(1.24);
+  backdrop-filter: blur(20px) saturate(1.24);
+}
+.primary-button::before, .secondary-button::before, .icon-button::before, .day-button::before,
+.catalog-tab::before, .row-action::before, .table-action::before, .phone-button::before,
+.nav-item::before, .sidebar-card::before, .schedule-event::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at var(--mx) var(--my), rgba(255,255,255,.72), transparent 34%),
+    linear-gradient(105deg, transparent 22%, rgba(255,255,255,.42) 46%, transparent 70%);
+  opacity: 0;
+  transform: translateX(-18%);
+  transition: opacity .34s var(--spring), transform .5s var(--spring);
+}
+.primary-button > *, .secondary-button > *, .icon-button > *, .day-button > *,
+.catalog-tab > *, .row-action > *, .table-action > *, .phone-button > *,
+.nav-item > *, .sidebar-card > *, .schedule-event > * {
+  position: relative;
+  z-index: 1;
+}
+.glass-hovering::before, .glass-hovering::after {
+  opacity: .92;
+}
+.glass-hovering.primary-button::before, .glass-hovering.secondary-button::before,
+.glass-hovering.icon-button::before, .glass-hovering.day-button::before,
+.glass-hovering.catalog-tab::before, .glass-hovering.row-action::before,
+.glass-hovering.table-action::before, .glass-hovering.phone-button::before,
+.glass-hovering.nav-item::before, .glass-hovering.sidebar-card::before,
+.glass-hovering.schedule-event::before {
+  opacity: 1;
+  transform: translateX(0);
+}
+.metric-card:nth-child(1), .panel:nth-child(1), .course-card:nth-child(1), .class-card:nth-child(1) { animation-delay: .02s; }
+.metric-card:nth-child(2), .panel:nth-child(2), .course-card:nth-child(2), .class-card:nth-child(2) { animation-delay: .06s; }
+.metric-card:nth-child(3), .panel:nth-child(3), .course-card:nth-child(3), .class-card:nth-child(3) { animation-delay: .10s; }
+.metric-card:nth-child(4), .panel:nth-child(4), .course-card:nth-child(4), .class-card:nth-child(4) { animation-delay: .14s; }
+.schedule-event:nth-child(2n), .lead-card:nth-child(2n), .todo-item:nth-child(2n) { animation-delay: .04s; }
+.schedule-event:nth-child(3n), .lead-card:nth-child(3n), .todo-item:nth-child(3n) { animation-delay: .08s; }
+
+.metric-card.glass-hovering, .panel.glass-hovering, .course-card.glass-hovering,
+.class-card.glass-hovering, .resource-card.glass-hovering, .trial-card.glass-hovering,
+.teacher-hours-card.glass-hovering, .attendance-class-card.glass-hovering,
+.summary-card.glass-hovering, .settings-card.glass-hovering,
+.account-profile-card.glass-hovering, .lead-card.glass-hovering, .table-card.glass-hovering,
+.catalog-stat.glass-hovering, .parent-student-card.glass-hovering {
+  transform: perspective(1100px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)) translate3d(0, -7px, 0) scale(1.008);
+  border-color: rgba(255,255,255,.96);
+  box-shadow:
+    0 42px 104px rgba(139, 82, 10, .18),
+    0 18px 38px rgba(255, 164, 36, .12),
+    inset 0 1px rgba(255,255,255,.96),
+    inset 0 -1px rgba(255, 196, 89, .24);
+}
+.schedule-event.glass-hovering, .sidebar-card.glass-hovering {
+  transform: perspective(900px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)) translate3d(0, -4px, 0) scale(1.006);
+}
+.nav-item.glass-hovering, .primary-button.glass-hovering, .secondary-button.glass-hovering,
+.icon-button.glass-hovering, .day-button.glass-hovering, .catalog-tab.glass-hovering,
+.row-action.glass-hovering, .table-action.glass-hovering, .phone-button.glass-hovering {
+  transform: translateY(-2px) scale(1.015);
+}
+.is-pressing {
+  transform: translateY(1px) scale(.982)!important;
+  transition-duration: .13s!important;
+}
+.toast.show {
+  animation: toast-float .46s var(--spring-pop) both;
+}
+
 @keyframes shell-in {
   from { opacity: 0; transform: translateY(8px); filter: blur(5px); }
   to { opacity: 1; transform: translateY(0); filter: blur(0); }
@@ -1110,24 +1250,33 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 @keyframes page-enter {
-  from { opacity: 0; transform: translateY(14px) scale(.992); filter: blur(4px); }
-  to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+  0% { opacity: 0; transform: translateY(22px) scale(.972); filter: blur(12px) saturate(.92); }
+  58% { opacity: 1; transform: translateY(-2px) scale(1.006); filter: blur(0) saturate(1.06); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0) saturate(1); }
 }
 @keyframes card-rise {
-  from { opacity: 0; transform: translateY(13px) scale(.986); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  0% { opacity: 0; transform: translateY(18px) scale(.968); filter: blur(7px); }
+  64% { opacity: 1; transform: translateY(-3px) scale(1.012); filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
 }
 @keyframes list-pop {
-  from { opacity: 0; transform: translateY(8px) scale(.988); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  0% { opacity: 0; transform: translateY(12px) scale(.975); filter: blur(5px); }
+  72% { opacity: 1; transform: translateY(-1px) scale(1.006); filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
 }
 @keyframes backdrop-in {
   from { opacity: 0; backdrop-filter: blur(0) saturate(1); }
   to { opacity: 1; backdrop-filter: blur(16px) saturate(1.12); }
 }
 @keyframes modal-in {
-  from { opacity: 0; transform: translateY(18px) scale(.965); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  0% { opacity: 0; transform: translateY(24px) scale(.94); filter: blur(10px); }
+  66% { opacity: 1; transform: translateY(-4px) scale(1.012); filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+@keyframes toast-float {
+  0% { opacity: 0; transform: translateX(-50%) translateY(18px) scale(.92); filter: blur(6px); }
+  70% { opacity: 1; transform: translateX(-50%) translateY(-2px) scale(1.02); filter: blur(0); }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); filter: blur(0); }
 }
 @keyframes float-soft {
   0%, 100% { transform: translateY(0); }

@@ -45,6 +45,34 @@ const leadStages = ["新线索", "已联系", "待试听", "待报名", "已报�
 const trialStatuses = ["待试听", "已试听", "已转正", "已取消"];
 const trialResults = ["未填写", "适合报名", "需再跟进", "暂不适合", "未到场"];
 const COLORS_FOR_TODO_PICKER = ["#ff9f1c", "#ffd33d", "#715b87", "#4f896f", "#f47a12"];
+const liquidInteractiveSelector = [
+  ".metric-card",
+  ".panel",
+  ".table-card",
+  ".summary-card",
+  ".course-card",
+  ".class-card",
+  ".resource-card",
+  ".trial-card",
+  ".teacher-hours-card",
+  ".attendance-class-card",
+  ".settings-card",
+  ".account-profile-card",
+  ".catalog-stat",
+  ".parent-student-card",
+  ".lead-card",
+  ".sidebar-card",
+  ".nav-item",
+  ".primary-button",
+  ".secondary-button",
+  ".icon-button",
+  ".day-button",
+  ".catalog-tab",
+  ".row-action",
+  ".table-action",
+  ".phone-button",
+  ".schedule-event",
+].join(",");
 
 const pageMeta = {
   dashboard: ["总览", "下午好，林老师"],
@@ -1782,6 +1810,30 @@ function animatePageContent() {
   pageContent.classList.add("page-enter");
 }
 
+function updateLiquidPointer(event) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const target = event.target.closest?.(liquidInteractiveSelector);
+  if (!target) return;
+  const rect = target.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+  target.style.setProperty("--mx", `${(x * 100).toFixed(1)}%`);
+  target.style.setProperty("--my", `${(y * 100).toFixed(1)}%`);
+  target.style.setProperty("--tilt-x", `${((0.5 - y) * 7).toFixed(2)}deg`);
+  target.style.setProperty("--tilt-y", `${((x - 0.5) * 8).toFixed(2)}deg`);
+  target.classList.add("glass-hovering");
+}
+
+function resetLiquidPointer(target) {
+  if (!target) return;
+  target.style.removeProperty("--tilt-x");
+  target.style.removeProperty("--tilt-y");
+  target.style.removeProperty("--mx");
+  target.style.removeProperty("--my");
+  target.classList.remove("glass-hovering", "is-pressing");
+}
+
 function syncStudentCourseOptions() {
   const select = document.querySelector('#studentForm select[name="course"]');
   if (!select || !catalog.courses.length) return;
@@ -2032,6 +2084,16 @@ document.addEventListener("click", async event => {
     return;
   }
 
+  if (event.target.closest(".edit-lead-goal")) {
+    renderLeadGoalCard(true);
+    return;
+  }
+
+  if (event.target.closest(".cancel-lead-goal")) {
+    renderLeadGoalCard(false);
+    return;
+  }
+
   const go = event.target.closest("[data-go]");
   if (go && !event.target.closest(".checkin")) renderPage(go.dataset.go);
 
@@ -2209,16 +2271,6 @@ document.addEventListener("click", async event => {
 
   if (event.target.closest(".cancel-user-edit")) resetUserForm();
 
-  if (event.target.closest(".edit-lead-goal")) {
-    renderLeadGoalCard(true);
-    return;
-  }
-
-  if (event.target.closest(".cancel-lead-goal")) {
-    renderLeadGoalCard(false);
-    return;
-  }
-
   if (event.target.closest(".edit-dashboard-todos")) {
     dashboardTodoEditing = !dashboardTodoEditing;
     renderDashboard();
@@ -2259,6 +2311,22 @@ document.addEventListener("click", async event => {
     }
   }
 });
+
+document.addEventListener("pointermove", updateLiquidPointer, { passive: true });
+document.addEventListener("pointerdown", event => {
+  const target = event.target.closest?.(liquidInteractiveSelector);
+  if (target) target.classList.add("is-pressing");
+}, { passive: true });
+document.addEventListener("pointerup", () => {
+  document.querySelectorAll(".is-pressing").forEach(item => item.classList.remove("is-pressing"));
+}, { passive: true });
+document.addEventListener("pointercancel", () => {
+  document.querySelectorAll(".is-pressing").forEach(resetLiquidPointer);
+}, { passive: true });
+document.addEventListener("pointerout", event => {
+  const target = event.target.closest?.(liquidInteractiveSelector);
+  if (target && !target.contains(event.relatedTarget)) resetLiquidPointer(target);
+}, { passive: true });
 
 document.querySelector("#quickAdd").addEventListener("click", async () => {
   if (!can("students:write")) {
