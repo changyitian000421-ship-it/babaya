@@ -19,7 +19,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
+from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parent
@@ -37,6 +38,12 @@ STATUSES = {"在读", "待续费", "请假中", "待分班", "停课"}
 COLORS = ["#ff9f1c", "#ffd33d", "#f47a12", "#715b87", "#4f896f"]
 SESSION_COOKIE = "sd_session"
 SESSION_HOURS = 12
+DEFAULT_INITIAL_PASSWORD = "000000"
+WECHAT_APP_ID = os.environ.get("WECHAT_APP_ID", "").strip()
+WECHAT_APP_SECRET = os.environ.get("WECHAT_APP_SECRET", "").strip()
+WECHAT_BIND_TOKEN_MINUTES = 15
+PARENT_BIND_CODE_DAYS = 7
+BIND_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 ROLE_LABELS = {
     "owner": "校长 / 管理员",
@@ -44,21 +51,24 @@ ROLE_LABELS = {
     "teacher": "授课教师",
     "sales": "招生顾问",
     "finance": "财务",
+    "parent": "家长",
 }
 
 ROLE_PERMISSIONS = {
     "owner": {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
-        "roster:write", "leads:read", "leads:write", "hours:read", "teaching:read",
-        "settings:read", "settings:write",
+        "roster:write", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read",
+        "payments:read", "payments:write", "settings:read", "settings:write",
     },
     "academic": {
         "dashboard:read", "students:read", "students:write", "catalog:read", "catalog:write",
-        "roster:write", "teaching:read",
+        "roster:write", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read",
+        "payments:read", "payments:write",
     },
-    "teacher": {"dashboard:read", "students:read", "catalog:read", "teaching:read"},
+    "teacher": {"dashboard:read", "students:read", "catalog:read", "leads:read", "leads:write", "hours:read", "hours:write", "teaching:read"},
     "sales": {"dashboard:read", "students:read", "students:write", "leads:read", "leads:write"},
-    "finance": {"dashboard:read", "students:read", "hours:read"},
+    "finance": {"dashboard:read", "students:read", "leads:read", "leads:write", "hours:read", "hours:write", "payments:read", "payments:write"},
+    "parent": {"parent:read"},
 }
 
 SEED_USERS = [
@@ -85,6 +95,7 @@ SEED_COURSES = [
 ]
 
 SEED_TEACHERS = [
+    ("林知夏", "林校长", "主持、语言艺术综合课", "13800000001", "#f47a12"),
     ("陈语安", "陈老师", "主持、少儿口才", "13800001001", "#ff9f1c"),
     ("苏清禾", "苏老师", "朗诵、语音表达", "13800001002", "#715b87"),
     ("方明远", "方老师", "演讲、赛事辅导", "13800001003", "#4f896f"),
@@ -102,6 +113,27 @@ SEED_CLASSES = [
     ("朗诵进阶 A 班", "朗诵表达进阶班", "苏老师", "B101", 5, "16:00", 90, 10, "进行中"),
     ("演讲一对一", "演讲与口才一对一", "方老师", "A205", 5, "18:30", 60, 1, "进行中"),
     ("表演启蒙 A 班", "舞台表演启蒙班", "顾老师", "B101", 5, "19:40", 60, 10, "招生中"),
+]
+
+LEAD_STAGES = ("新线索", "已联系", "待试听", "待报名", "已报名", "无效")
+TRIAL_STATUSES = ("待试听", "已试听", "已转正", "已取消")
+TRIAL_RESULTS = ("未填写", "适合报名", "需再跟进", "暂不适合", "未到场")
+HOUR_ACTIONS = {
+    "purchase": ("购买课时", 1),
+    "consume": ("上课消课", -1),
+    "return": ("请假返还", 1),
+    "deduct": ("手动扣减", -1),
+}
+ATTENDANCE_STATUSES = {"present": "到课", "leave": "请假", "absent": "缺勤"}
+
+SEED_LEADS = [
+    ("林可昕", 7, "139****1021", "大众点评", "新线索", "主持", "希望改善胆小、不敢表达的问题", ""),
+    ("唐子墨", 9, "136****7782", "老带新", "新线索", "朗诵", "对朗诵和舞台表演有兴趣", ""),
+    ("韩雨桐", 6, "188****2365", "公众号", "已联系", "启蒙", "妈妈周末方便带孩子来试听", ""),
+    ("宋安然", 10, "137****6119", "地推活动", "已联系", "主持", "有学校主持经验，想系统提升", ""),
+    ("程知远", 8, "150****0927", "小红书", "待试听", "口才", "已约本周六 15:00 体验课", "周六 15:00"),
+    ("叶舒然", 11, "152****5180", "视频号", "待试听", "演讲", "准备校内演讲比赛", "周日 10:00"),
+    ("温以宁", 7, "138****9204", "老带新", "待报名", "朗诵", "试听反馈很好，待确认班级时间", ""),
 ]
 
 
@@ -265,7 +297,7 @@ def translate_postgres_sql(sql: str) -> str:
 
 
 def should_return_id(sql: str) -> bool:
-    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users)\b", sql, re.IGNORECASE))
+    return bool(re.match(r"\s*INSERT\s+INTO\s+(students|courses|teachers|rooms|classes|users|leads|trial_lessons|payments|hour_transactions|class_attendance|parent_binding_codes|wechat_login_tokens)\b", sql, re.IGNORECASE))
 
 
 def postgres_schema(script: str) -> str:
@@ -346,6 +378,9 @@ def user_to_dict(row: sqlite3.Row) -> dict:
         "username": row["username"],
         "phone": row["phone"],
         "name": row["name"],
+        "avatarText": row["avatar_text"] if "avatar_text" in row.keys() else (row["name"][:1] or "员"),
+        "avatarColor": row["avatar_color"] if "avatar_color" in row.keys() else "#ff9f1c",
+        "avatarImage": row["avatar_image"] if "avatar_image" in row.keys() else "",
         "role": row["role"],
         "roleLabel": ROLE_LABELS.get(row["role"], row["role"]),
         "permissions": permissions,
@@ -353,28 +388,74 @@ def user_to_dict(row: sqlite3.Row) -> dict:
 
 
 def ensure_user_schema(db: sqlite3.Connection) -> None:
-    if DATABASE_KIND == "postgres":
-        columns = {
-            row["name"]
-            for row in db.execute(
-                """
-                SELECT column_name AS name
-                FROM information_schema.columns
-                WHERE table_name = 'users'
-                """
-            ).fetchall()
-        }
-    else:
-        columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
+    columns = table_columns(db, "users")
     if "phone" not in columns:
         db.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+    if "avatar_text" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN avatar_text TEXT NOT NULL DEFAULT ''")
+    if "avatar_color" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN avatar_color TEXT NOT NULL DEFAULT '#ff9f1c'")
+    if "avatar_image" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN avatar_image TEXT NOT NULL DEFAULT ''")
+    if "wechat_openid" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN wechat_openid TEXT NOT NULL DEFAULT ''")
     for username, phone, _password, _name, _role in SEED_USERS:
         db.execute(
             "UPDATE users SET phone = ? WHERE username = ? AND phone = ''",
             (phone, username),
         )
     db.execute("UPDATE users SET phone = username WHERE phone = ''")
+    db.execute("UPDATE users SET avatar_text = substr(name, 1, 1) WHERE avatar_text = ''")
+    db.execute("UPDATE users SET avatar_color = '#ff9f1c' WHERE avatar_color = ''")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_users_wechat_openid ON users(wechat_openid)")
+
+
+def table_columns(db: sqlite3.Connection, table: str) -> set[str]:
+    if DATABASE_KIND == "postgres":
+        return {
+            row["name"]
+            for row in db.execute(
+                """
+                SELECT column_name AS name
+                FROM information_schema.columns
+                WHERE table_name = ?
+                """,
+                (table,),
+            ).fetchall()
+        }
+    return {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def ensure_class_schedule_schema(db: sqlite3.Connection) -> None:
+    columns = table_columns(db, "classes")
+    if "start_date" not in columns:
+        db.execute("ALTER TABLE classes ADD COLUMN start_date TEXT NOT NULL DEFAULT ''")
+    if "end_date" not in columns:
+        db.execute("ALTER TABLE classes ADD COLUMN end_date TEXT NOT NULL DEFAULT ''")
+    current_year = datetime.now().year
+    db.execute("UPDATE classes SET start_date = ? WHERE start_date = ''", (f"{current_year}-01-01",))
+    db.execute("UPDATE classes SET end_date = ? WHERE end_date = ''", (f"{current_year}-12-31",))
+
+
+def ensure_seed_teachers(db: sqlite3.Connection) -> None:
+    for name, display_name, specialty, phone, color in SEED_TEACHERS:
+        if db.execute("SELECT id FROM teachers WHERE display_name = ?", (display_name,)).fetchone():
+            continue
+        db.execute(
+            """
+            INSERT INTO teachers (name, display_name, specialty, phone, color, active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (name, display_name, specialty, phone, color),
+        )
+
+
+def ensure_hour_transaction_schema(db: sqlite3.Connection) -> None:
+    columns = table_columns(db, "hour_transactions")
+    if "teacher_id" not in columns:
+        db.execute("ALTER TABLE hour_transactions ADD COLUMN teacher_id INTEGER")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_hour_transactions_teacher ON hour_transactions(teacher_id)")
 
 
 def validate_user(payload: dict, existing: sqlite3.Row | None = None) -> dict:
@@ -388,11 +469,108 @@ def validate_user(payload: dict, existing: sqlite3.Row | None = None) -> dict:
         raise ValueError("请填写员工姓名")
     if role not in ROLE_LABELS:
         raise ValueError("请选择有效角色")
-    if not existing and len(password) < 6:
-        raise ValueError("初始密码至少 6 位")
     if existing and password and len(password) < 6:
         raise ValueError("新密码至少 6 位")
+    if not existing:
+        password = DEFAULT_INITIAL_PASSWORD
     return {"phone": phone, "name": name, "role": role, "password": password}
+
+
+def validate_profile(payload: dict) -> dict:
+    phone = str(payload.get("phone", "")).strip()
+    name = str(payload.get("name", "")).strip()
+    avatar_text = str(payload.get("avatar_text", "")).strip()[:2]
+    avatar_color = str(payload.get("avatar_color", "#ff9f1c")).strip() or "#ff9f1c"
+    avatar_image = str(payload.get("avatar_image", "")).strip()
+    if not phone or len(phone) < 7:
+        raise ValueError("请填写有效手机号")
+    if not name:
+        raise ValueError("请填写姓名")
+    if not avatar_text:
+        avatar_text = name[:1] or "员"
+    if not re.match(r"^#[0-9a-fA-F]{6}$", avatar_color):
+        raise ValueError("头像颜色格式无效")
+    if avatar_image:
+        if len(avatar_image) > 450_000:
+            raise ValueError("头像图片太大，请选择较小图片")
+        if not re.match(r"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$", avatar_image):
+            raise ValueError("头像图片格式仅支持 PNG、JPG 或 WebP")
+    return {"phone": phone, "name": name, "avatar_text": avatar_text, "avatar_color": avatar_color, "avatar_image": avatar_image}
+
+
+def validate_password_change(payload: dict) -> dict:
+    current_password = str(payload.get("current_password", ""))
+    new_password = str(payload.get("new_password", ""))
+    confirm_password = str(payload.get("confirm_password", ""))
+    if not current_password:
+        raise ValueError("请输入当前密码")
+    if len(new_password) < 6:
+        raise ValueError("新密码至少 6 位")
+    if new_password != confirm_password:
+        raise ValueError("两次输入的新密码不一致")
+    return {"current_password": current_password, "new_password": new_password}
+
+
+def validate_lesson_date(value: str) -> str:
+    try:
+        return datetime.strptime(str(value).strip(), "%Y-%m-%d").date().isoformat()
+    except ValueError as exc:
+        raise ValueError("点名日期格式无效") from exc
+
+
+def validate_attendance_payload(payload: dict) -> dict:
+    lesson_date = validate_lesson_date(payload.get("lesson_date", ""))
+    records = payload.get("records")
+    if not isinstance(records, list) or not records:
+        raise ValueError("请至少提交一名学员的点名状态")
+    parsed_records = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("点名记录格式错误")
+        status = str(record.get("status", "")).strip()
+        if status not in ATTENDANCE_STATUSES:
+            raise ValueError("点名状态无效")
+        parsed_records.append({
+            "student_id": integer_value(record, "student_id", "学员", 1),
+            "status": status,
+            "note": str(record.get("note", "")).strip(),
+        })
+    return {"lesson_date": lesson_date, "records": parsed_records}
+
+
+def validate_dashboard_todos(payload: dict) -> list[dict]:
+    todos = payload.get("todos", [])
+    if not isinstance(todos, list):
+        raise ValueError("待办数据格式错误")
+    parsed = []
+    for index, item in enumerate(todos[:8]):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "")).strip()
+        if not title:
+            continue
+        parsed.append({
+            "title": title[:60],
+            "description": str(item.get("description", "")).strip()[:160],
+            "time_label": str(item.get("time", item.get("time_label", ""))).strip()[:20] or "待处理",
+            "color": str(item.get("color", COLORS[index % len(COLORS)])).strip()[:20] or COLORS[index % len(COLORS)],
+            "position": len(parsed),
+        })
+    return parsed
+
+
+def validate_teacher_profile(payload: dict) -> dict:
+    specialty = str(payload.get("specialty", "")).strip()
+    if len(specialty) > 300:
+        raise ValueError("教师简介最多 300 字")
+    return {"specialty": specialty}
+
+
+def validate_lead_goal(payload: dict) -> dict:
+    target = integer_value(payload, "target", "目标人数", 1)
+    if target > 100000:
+        raise ValueError("招生目标数字过大")
+    return {"target": target}
 
 
 def initialize_database() -> None:
@@ -458,6 +636,8 @@ def initialize_database() -> None:
                 course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE RESTRICT,
                 teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE RESTRICT,
                 room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE RESTRICT,
+                start_date TEXT NOT NULL DEFAULT '',
+                end_date TEXT NOT NULL DEFAULT '',
                 weekday INTEGER NOT NULL CHECK (weekday BETWEEN 0 AND 6),
                 start_time TEXT NOT NULL,
                 duration INTEGER NOT NULL CHECK (duration > 0),
@@ -483,6 +663,10 @@ def initialize_database() -> None:
                 phone TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 name TEXT NOT NULL,
+                avatar_text TEXT NOT NULL DEFAULT '',
+                avatar_color TEXT NOT NULL DEFAULT '#ff9f1c',
+                avatar_image TEXT NOT NULL DEFAULT '',
+                wechat_openid TEXT NOT NULL DEFAULT '',
                 role TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -497,9 +681,159 @@ def initialize_database() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+
+            CREATE TABLE IF NOT EXISTS parent_students (
+                parent_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                relation TEXT NOT NULL DEFAULT '家长',
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (parent_user_id, student_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_parent_students_student ON parent_students(student_id);
+
+            CREATE TABLE IF NOT EXISTS parent_binding_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                relation TEXT NOT NULL DEFAULT '家长',
+                expires_at TEXT NOT NULL,
+                used_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_parent_binding_codes_student ON parent_binding_codes(student_id);
+            CREATE INDEX IF NOT EXISTS idx_parent_binding_codes_expires ON parent_binding_codes(expires_at);
+
+            CREATE TABLE IF NOT EXISTS wechat_login_tokens (
+                token TEXT PRIMARY KEY,
+                openid TEXT NOT NULL,
+                session_key TEXT NOT NULL DEFAULT '',
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_wechat_login_tokens_openid ON wechat_login_tokens(openid);
+
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                age INTEGER NOT NULL CHECK (age BETWEEN 3 AND 18),
+                phone TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                stage TEXT NOT NULL DEFAULT '新线索',
+                tag TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                next_follow_at TEXT NOT NULL DEFAULT '',
+                last_contact_at TEXT NOT NULL DEFAULT '',
+                follow_count INTEGER NOT NULL DEFAULT 0 CHECK (follow_count >= 0),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
+            CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);
+
+            CREATE TABLE IF NOT EXISTS trial_lessons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+                student_id INTEGER REFERENCES students(id) ON DELETE SET NULL,
+                child_name TEXT NOT NULL,
+                age INTEGER NOT NULL CHECK (age BETWEEN 3 AND 18),
+                phone TEXT NOT NULL,
+                course_interest TEXT NOT NULL DEFAULT '',
+                teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE RESTRICT,
+                room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE RESTRICT,
+                scheduled_at TEXT NOT NULL,
+                duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK (duration_minutes > 0),
+                status TEXT NOT NULL DEFAULT '待试听',
+                result TEXT NOT NULL DEFAULT '未填写',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_trial_lessons_lead ON trial_lessons(lead_id);
+            CREATE INDEX IF NOT EXISTS idx_trial_lessons_teacher ON trial_lessons(teacher_id);
+            CREATE INDEX IF NOT EXISTS idx_trial_lessons_scheduled ON trial_lessons(scheduled_at);
+
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                payment_type TEXT NOT NULL DEFAULT '续费',
+                amount_paid REAL NOT NULL CHECK (amount_paid >= 0),
+                hours_added REAL NOT NULL CHECK (hours_added >= 0),
+                payment_method TEXT NOT NULL DEFAULT '微信',
+                paid_at TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                operator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_payments_student ON payments(student_id);
+            CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON payments(paid_at);
+
+            CREATE TABLE IF NOT EXISTS hour_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
+                action TEXT NOT NULL,
+                amount REAL NOT NULL CHECK (amount > 0),
+                delta REAL NOT NULL,
+                balance_after REAL NOT NULL CHECK (balance_after >= 0),
+                note TEXT NOT NULL DEFAULT '',
+                operator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                occurred_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_hour_transactions_student ON hour_transactions(student_id);
+            CREATE INDEX IF NOT EXISTS idx_hour_transactions_created ON hour_transactions(created_at);
+
+            CREATE TABLE IF NOT EXISTS class_attendance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
+                lesson_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                hours_delta REAL NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                recorded_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(class_id, student_id, lesson_date)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_class_attendance_class_date ON class_attendance(class_id, lesson_date);
+            CREATE INDEX IF NOT EXISTS idx_class_attendance_student ON class_attendance(student_id);
+
+            CREATE TABLE IF NOT EXISTS dashboard_todos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                time_label TEXT NOT NULL DEFAULT '',
+                color TEXT NOT NULL DEFAULT '#ff9f1c',
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_dashboard_todos_user ON dashboard_todos(user_id, position);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
             """
         db.executescript(postgres_schema(schema_sql) if DATABASE_KIND == "postgres" else schema_sql)
         ensure_user_schema(db)
+        ensure_class_schedule_schema(db)
+        ensure_hour_transaction_schema(db)
         now = datetime.now().isoformat(timespec="seconds")
         count = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
         if count == 0:
@@ -526,6 +860,7 @@ def initialize_database() -> None:
                 "INSERT INTO teachers (name, display_name, specialty, phone, color) VALUES (?, ?, ?, ?, ?)",
                 SEED_TEACHERS,
             )
+        ensure_seed_teachers(db)
         if db.execute("SELECT COUNT(*) FROM rooms").fetchone()[0] == 0:
             db.executemany(
                 "INSERT INTO rooms (name, code, capacity) VALUES (?, ?, ?)",
@@ -540,10 +875,14 @@ def initialize_database() -> None:
                 db.execute(
                     """
                     INSERT INTO classes
-                        (name, course_id, teacher_id, room_id, weekday, start_time, duration, capacity, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (name, course_id, teacher_id, room_id, start_date, end_date, weekday, start_time, duration, capacity, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (name, course_id, teacher_id, room_id, weekday, start_time, duration, capacity, status, now, now),
+                    (
+                        name, course_id, teacher_id, room_id,
+                        f"{datetime.now().year}-01-01", f"{datetime.now().year}-12-31",
+                        weekday, start_time, duration, capacity, status, now, now,
+                    ),
                 )
         if db.execute("SELECT COUNT(*) FROM class_students").fetchone()[0] == 0:
             students = db.execute("SELECT id, course FROM students").fetchall()
@@ -564,13 +903,22 @@ def initialize_database() -> None:
         if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             db.executemany(
                 """
-                INSERT INTO users (username, phone, password_hash, name, role, active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                INSERT INTO users (username, phone, password_hash, name, avatar_text, avatar_color, avatar_image, role, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, '', ?, 1, ?, ?)
                 """,
                 [
-                    (username, phone, hash_password(password), name, role, now, now)
-                    for username, phone, password, name, role in SEED_USERS
+                    (username, phone, hash_password(password), name, name[:1], COLORS[index % len(COLORS)], role, now, now)
+                    for index, (username, phone, password, name, role) in enumerate(SEED_USERS)
                 ],
+            )
+        if db.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 0:
+            db.executemany(
+                """
+                INSERT INTO leads
+                    (name, age, phone, source, stage, tag, note, next_follow_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [(*lead, now, now) for lead in SEED_LEADS],
             )
 
 
@@ -593,11 +941,37 @@ def number_value(payload: dict, key: str, label: str, minimum: float = 0) -> flo
     return value
 
 
+def format_number(value: float) -> str:
+    number = float(value)
+    return str(int(number)) if number.is_integer() else f"{number:g}"
+
+
 def integer_value(payload: dict, key: str, label: str, minimum: int = 0) -> int:
     value = number_value(payload, key, label, minimum)
     if not value.is_integer():
         raise ValueError(f"{label}必须是整数")
     return int(value)
+
+
+def date_value(payload: dict, key: str, label: str) -> str:
+    value = str(payload.get(key, "")).strip()
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
+    except ValueError as exc:
+        raise ValueError(f"{label}格式无效，请选择日期") from exc
+
+
+def time_minutes(value: str, label: str) -> int:
+    if len(value) != 5 or value[2] != ":":
+        raise ValueError(f"{label}格式无效")
+    try:
+        hour = int(value[:2])
+        minute = int(value[3:])
+    except ValueError as exc:
+        raise ValueError(f"{label}格式无效") from exc
+    if hour > 23 or minute > 59:
+        raise ValueError(f"{label}格式无效")
+    return hour * 60 + minute
 
 
 def validate_course(payload: dict) -> dict:
@@ -648,21 +1022,35 @@ def validate_room(payload: dict) -> dict:
 def validate_class(payload: dict, db: sqlite3.Connection) -> dict:
     if not str(payload.get("name", "")).strip():
         raise ValueError("班级名称不能为空")
+    start_date = date_value(payload, "start_date", "开课日期")
+    end_date = date_value(payload, "end_date", "结课日期")
+    if end_date < start_date:
+        raise ValueError("结课日期不能早于开课日期")
+    start_time = str(payload.get("start_time", "")).strip()
+    start_minutes = time_minutes(start_time, "开始时间")
+    end_time = str(payload.get("end_time", "")).strip()
+    if end_time:
+        end_minutes = time_minutes(end_time, "结束时间")
+        if end_minutes <= start_minutes:
+            raise ValueError("结束时间必须晚于开始时间")
+        duration = end_minutes - start_minutes
+    else:
+        duration = integer_value(payload, "duration", "课程时长", 15)
     data = {
         "name": str(payload["name"]).strip(),
         "course_id": integer_value(payload, "course_id", "课程"),
         "teacher_id": integer_value(payload, "teacher_id", "教师"),
         "room_id": integer_value(payload, "room_id", "教室"),
+        "start_date": start_date,
+        "end_date": end_date,
         "weekday": integer_value(payload, "weekday", "上课星期"),
-        "start_time": str(payload.get("start_time", "")).strip(),
-        "duration": integer_value(payload, "duration", "课程时长", 15),
+        "start_time": start_time,
+        "duration": duration,
         "capacity": integer_value(payload, "capacity", "班级容量", 1),
         "status": str(payload.get("status", "招生中")).strip(),
     }
     if data["weekday"] > 6:
         raise ValueError("上课星期无效")
-    if len(data["start_time"]) != 5 or data["start_time"][2] != ":":
-        raise ValueError("上课时间格式无效")
     if data["status"] not in {"招生中", "进行中", "已结课", "暂停"}:
         raise ValueError("班级状态无效")
     for table, key, label in (
@@ -691,6 +1079,26 @@ def teacher_to_dict(row: sqlite3.Row) -> dict:
     return dict(row)
 
 
+def lead_goal_to_dict(completed: int, target: int) -> dict:
+    percent = round((completed / target) * 100) if target else 0
+    return {
+        "completed": completed,
+        "target": target,
+        "percent": max(0, min(100, percent)),
+    }
+
+
+def dashboard_todo_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "description": row["description"],
+        "time": row["time_label"],
+        "color": row["color"],
+        "position": row["position"],
+    }
+
+
 def room_to_dict(row: sqlite3.Row) -> dict:
     return dict(row)
 
@@ -698,8 +1106,318 @@ def room_to_dict(row: sqlite3.Row) -> dict:
 def class_to_dict(row: sqlite3.Row, students: list[dict] | None = None) -> dict:
     item = dict(row)
     item["students"] = students or []
-    item["current"] = len(item["students"])
+    item["current"] = len(item["students"]) if students is not None else int(item.get("current") or 0)
+    item["end_time"] = minutes_to_time(time_minutes(item["start_time"], "开始时间") + int(item["duration"]))
     return item
+
+
+def get_app_setting(db: sqlite3.Connection, key: str, default: str) -> str:
+    row = db.execute("SELECT setting_value FROM app_settings WHERE setting_key = ?", (key,)).fetchone()
+    return row["setting_value"] if row else default
+
+
+def current_month_enrollment_count(db: sqlite3.Connection) -> int:
+    month_start = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+    lead_enrolled = db.execute(
+        """
+        SELECT COUNT(*) FROM leads
+        WHERE stage = '已报名' AND date(updated_at) >= ?
+        """,
+        (month_start,),
+    ).fetchone()[0]
+    trial_converted = db.execute(
+        """
+        SELECT COUNT(*) FROM trial_lessons tl
+        WHERE tl.status = '已转正'
+            AND date(tl.updated_at) >= ?
+            AND (
+                tl.lead_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM leads l
+                    WHERE l.id = tl.lead_id
+                        AND l.stage = '已报名'
+                        AND date(l.updated_at) >= ?
+                )
+            )
+        """,
+        (month_start, month_start),
+    ).fetchone()[0]
+    return int(lead_enrolled or 0) + int(trial_converted or 0)
+
+
+def minutes_to_time(total_minutes: int) -> str:
+    hour = (total_minutes // 60) % 24
+    minute = total_minutes % 60
+    return f"{hour:02d}:{minute:02d}"
+
+
+def lead_to_dict(row: sqlite3.Row) -> dict:
+    return dict(row)
+
+
+def trial_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "lead_id": row["lead_id"],
+        "student_id": row["student_id"],
+        "child_name": row["child_name"],
+        "age": row["age"],
+        "phone": row["phone"],
+        "course_interest": row["course_interest"],
+        "teacher_id": row["teacher_id"],
+        "teacher_name": row["teacher_name"] if "teacher_name" in row.keys() else "",
+        "teacher_color": row["teacher_color"] if "teacher_color" in row.keys() else "#ff9f1c",
+        "room_id": row["room_id"],
+        "room_name": row["room_name"] if "room_name" in row.keys() else "",
+        "room_code": row["room_code"] if "room_code" in row.keys() else "",
+        "scheduled_at": row["scheduled_at"],
+        "duration_minutes": row["duration_minutes"],
+        "status": row["status"],
+        "result": row["result"],
+        "note": row["note"],
+        "lead_stage": row["lead_stage"] if "lead_stage" in row.keys() else "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def payment_to_dict(row: sqlite3.Row) -> dict:
+    item = dict(row)
+    for key in ("amount_paid", "hours_added", "balance_after"):
+        if key in item and item[key] is not None:
+            item[key] = float(item[key])
+            if item[key].is_integer():
+                item[key] = int(item[key])
+    return item
+
+
+def validate_lead(payload: dict) -> dict:
+    name = str(payload.get("name", "")).strip()
+    age = integer_value(payload, "age", "年龄", 3)
+    phone = str(payload.get("phone", "")).strip()
+    stage = str(payload.get("stage", "新线索")).strip()
+    if not name:
+        raise ValueError("请填写线索姓名")
+    if age > 18:
+        raise ValueError("年龄需要在 3-18 岁之间")
+    if not phone or len(phone) < 7:
+        raise ValueError("请填写有效联系电话")
+    if stage not in LEAD_STAGES:
+        raise ValueError("线索阶段无效")
+    return {
+        "name": name,
+        "age": age,
+        "phone": phone,
+        "source": str(payload.get("source", "")).strip(),
+        "stage": stage,
+        "tag": str(payload.get("tag", "")).strip(),
+        "note": str(payload.get("note", "")).strip(),
+        "next_follow_at": str(payload.get("next_follow_at", "")).strip(),
+    }
+
+
+def validate_scheduled_at(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("请选择试听时间")
+    for pattern in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(raw, pattern).isoformat(timespec="minutes")
+        except ValueError:
+            continue
+    raise ValueError("试听时间格式无效")
+
+
+def validate_trial(payload: dict) -> dict:
+    raw_lead_id = str(payload.get("lead_id", "")).strip()
+    lead_id = int(raw_lead_id) if raw_lead_id else None
+    child_name = str(payload.get("child_name", "")).strip()
+    phone = str(payload.get("phone", "")).strip()
+    course_interest = str(payload.get("course_interest", "")).strip() or "待确认"
+    status = str(payload.get("status", "待试听")).strip()
+    result = str(payload.get("result", "未填写")).strip() or "未填写"
+    if not child_name:
+        raise ValueError("请填写孩子姓名")
+    if not phone or len(phone) < 7:
+        raise ValueError("请填写有效联系电话")
+    if status not in TRIAL_STATUSES:
+        raise ValueError("试听状态无效")
+    if result not in TRIAL_RESULTS:
+        raise ValueError("试听结果无效")
+    age = integer_value(payload, "age", "年龄", 3)
+    if age > 18:
+        raise ValueError("年龄需要在 3-18 岁之间")
+    duration_minutes = integer_value(payload, "duration_minutes", "试听时长", 15)
+    if duration_minutes > 240:
+        raise ValueError("试听时长不能超过 240 分钟")
+    return {
+        "lead_id": lead_id,
+        "child_name": child_name,
+        "age": age,
+        "phone": phone,
+        "course_interest": course_interest,
+        "teacher_id": integer_value(payload, "teacher_id", "试听老师", 1),
+        "room_id": integer_value(payload, "room_id", "试听教室", 1),
+        "scheduled_at": validate_scheduled_at(payload.get("scheduled_at", "")),
+        "duration_minutes": duration_minutes,
+        "status": status,
+        "result": result,
+        "note": str(payload.get("note", "")).strip(),
+    }
+
+
+def validate_hour_transaction(payload: dict) -> dict:
+    action = str(payload.get("action", "")).strip()
+    if action not in HOUR_ACTIONS:
+        raise ValueError("课时变动类型无效")
+    return {
+        "student_id": integer_value(payload, "student_id", "学员", 1),
+        "teacher_id": integer_value(payload, "teacher_id", "教师", 1),
+        "action": action,
+        "amount": number_value(payload, "amount", "课时数", 0.5),
+        "note": str(payload.get("note", "")).strip(),
+        "occurred_at": str(payload.get("occurred_at", "")).strip() or datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def validate_payment(payload: dict) -> dict:
+    payment_type = str(payload.get("payment_type", "续费")).strip()
+    payment_method = str(payload.get("payment_method", "微信")).strip()
+    paid_at = str(payload.get("paid_at", "")).strip() or datetime.now().isoformat(timespec="seconds")
+    if payment_type not in {"新报名", "续费", "补缴", "退费记录"}:
+        raise ValueError("缴费类型无效")
+    if payment_method not in {"微信", "支付宝", "现金", "银行卡", "其他"}:
+        raise ValueError("付款方式无效")
+    amount_paid = number_value(payload, "amount_paid", "缴费金额", 0)
+    hours_added = number_value(payload, "hours_added", "新增课时", 0)
+    if payment_type != "退费记录" and amount_paid <= 0:
+        raise ValueError("缴费金额必须大于 0")
+    if payment_type != "退费记录" and hours_added <= 0:
+        raise ValueError("新增课时必须大于 0")
+    return {
+        "student_id": integer_value(payload, "student_id", "学员", 1),
+        "payment_type": payment_type,
+        "amount_paid": amount_paid,
+        "hours_added": hours_added,
+        "payment_method": payment_method,
+        "paid_at": paid_at,
+        "note": str(payload.get("note", "")).strip(),
+    }
+
+
+def hour_transaction_to_dict(row: sqlite3.Row) -> dict:
+    item = dict(row)
+    for key in ("amount", "delta", "balance_after"):
+        item[key] = float(item[key])
+        if item[key].is_integer():
+            item[key] = int(item[key])
+    item["action_label"] = HOUR_ACTIONS.get(item["action"], (item["action"], 0))[0]
+    return item
+
+
+def teacher_ids_for_user(db: sqlite3.Connection, user: sqlite3.Row | dict | None) -> list[int] | None:
+    if not user or user["role"] in {"owner", "academic", "finance"}:
+        return None
+    if user["role"] != "teacher":
+        return []
+    rows = db.execute(
+        """
+        SELECT id FROM teachers
+        WHERE active = 1 AND (display_name = ? OR name = ? OR phone = ?)
+        """,
+        (user["name"], user["name"], user["phone"]),
+    ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def own_teacher_ids_for_user(db: sqlite3.Connection, user: sqlite3.Row | dict | None) -> list[int]:
+    if not user or user["role"] not in {"owner", "teacher"}:
+        return []
+    rows = db.execute(
+        """
+        SELECT id FROM teachers
+        WHERE active = 1 AND (display_name = ? OR name = ? OR phone = ?)
+        """,
+        (user["name"], user["name"], user["phone"]),
+    ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def student_belongs_to_teacher(db: sqlite3.Connection, teacher_id: int, student_id: int) -> bool:
+    return bool(
+        db.execute(
+            """
+            SELECT 1
+            FROM class_students cs
+            JOIN classes c ON c.id = cs.class_id
+            WHERE c.teacher_id = ? AND cs.student_id = ?
+            LIMIT 1
+            """,
+            (teacher_id, student_id),
+        ).fetchone()
+    )
+
+
+def parent_student_ids(db: sqlite3.Connection, user: dict | None) -> list[int]:
+    if not user or user.get("role") != "parent":
+        return []
+    rows = db.execute(
+        "SELECT student_id FROM parent_students WHERE parent_user_id = ? ORDER BY student_id",
+        (user["id"],),
+    ).fetchall()
+    return [row["student_id"] for row in rows]
+
+
+def generate_parent_binding_code(db: sqlite3.Connection) -> str:
+    active_cutoff = datetime.now().isoformat(timespec="seconds")
+    for _ in range(30):
+        code = "".join(secrets.choice(BIND_CODE_ALPHABET) for _ in range(8))
+        exists = db.execute(
+            """
+            SELECT id FROM parent_binding_codes
+            WHERE code = ? AND used_at = '' AND expires_at > ?
+            """,
+            (code, active_cutoff),
+        ).fetchone()
+        if not exists:
+            return code
+    raise ValueError("生成绑定码失败，请稍后重试")
+
+
+def exchange_wechat_code(code: str) -> dict:
+    if not code:
+        raise ValueError("缺少微信登录 code")
+    if not WECHAT_APP_ID or not WECHAT_APP_SECRET:
+        openid = "dev_" + hashlib.sha256(code.encode("utf-8")).hexdigest()[:24]
+        return {"openid": openid, "session_key": "dev-session"}
+    query = urlencode(
+        {
+            "appid": WECHAT_APP_ID,
+            "secret": WECHAT_APP_SECRET,
+            "js_code": code,
+            "grant_type": "authorization_code",
+        }
+    )
+    with urlopen(f"https://api.weixin.qq.com/sns/jscode2session?{query}", timeout=8) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if result.get("errcode"):
+        raise ValueError(f"微信登录失败：{result.get('errmsg', result['errcode'])}")
+    if not result.get("openid"):
+        raise ValueError("微信登录没有返回 openid")
+    return {
+        "openid": str(result["openid"]),
+        "session_key": str(result.get("session_key", "")),
+    }
+
+
+def class_occurs_on_date(row: sqlite3.Row, lesson_date: str) -> bool:
+    date = datetime.strptime(lesson_date, "%Y-%m-%d").date()
+    return (
+        int(row["weekday"]) == date.weekday()
+        and str(row["start_date"]) <= lesson_date
+        and str(row["end_date"]) >= lesson_date
+        and row["status"] in {"招生中", "进行中"}
+    )
 
 
 def validate_student(payload: dict, partial: bool = False) -> dict:
@@ -826,6 +1544,24 @@ class AppHandler(BaseHTTPRequestHandler):
     def set_session_cookie(self, token: str, max_age: int) -> str:
         return f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}"
 
+    def issue_session(self, db: sqlite3.Connection, user_id: int) -> tuple[str, sqlite3.Row]:
+        token = secrets.token_urlsafe(32)
+        now = datetime.now()
+        expires_at = now + timedelta(hours=SESSION_HOURS)
+        db.execute(
+            "INSERT INTO auth_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (
+                token,
+                user_id,
+                now.isoformat(timespec="seconds"),
+                expires_at.isoformat(timespec="seconds"),
+            ),
+        )
+        row = db.execute("SELECT * FROM users WHERE id = ? AND active = 1", (user_id,)).fetchone()
+        if not row:
+            raise ValueError("账号不可用")
+        return token, row
+
     def get_session(self) -> None:
         user = self.current_user()
         if not user:
@@ -849,18 +1585,7 @@ class AppHandler(BaseHTTPRequestHandler):
             if not row or not verify_password(password, row["password_hash"]):
                 self.send_error_json(HTTPStatus.UNAUTHORIZED, "手机号或密码不正确")
                 return
-            token = secrets.token_urlsafe(32)
-            now = datetime.now()
-            expires_at = now + timedelta(hours=SESSION_HOURS)
-            db.execute(
-                "INSERT INTO auth_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-                (
-                    token,
-                    row["id"],
-                    now.isoformat(timespec="seconds"),
-                    expires_at.isoformat(timespec="seconds"),
-                ),
-            )
+            token, row = self.issue_session(db, row["id"])
         self.send_json(
             {"user": user_to_dict(row)},
             extra_headers={"Set-Cookie": self.set_session_cookie(token, SESSION_HOURS * 60 * 60)},
@@ -876,6 +1601,316 @@ class AppHandler(BaseHTTPRequestHandler):
             extra_headers={"Set-Cookie": self.set_session_cookie("", 0)},
         )
 
+    def current_parent_scope(self, db: sqlite3.Connection) -> tuple[dict, list[int]] | None:
+        user = self.current_user()
+        if not user or user["role"] != "parent":
+            self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不是家长账号")
+            return None
+        return user, parent_student_ids(db, user)
+
+    def get_parent_me(self) -> None:
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            user, student_ids = scope
+        self.send_json({"user": user, "studentIds": student_ids})
+
+    def get_parent_students(self) -> None:
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            _user, student_ids = scope
+            if not student_ids:
+                self.send_json([])
+                return
+            placeholders = ", ".join("?" for _ in student_ids)
+            rows = db.execute(
+                f"SELECT * FROM students WHERE id IN ({placeholders}) ORDER BY name",
+                tuple(student_ids),
+            ).fetchall()
+        self.send_json([student_to_dict(row) for row in rows])
+
+    def get_parent_schedule(self, query: dict) -> None:
+        start = query.get("start", [""])[0].strip()
+        end = query.get("end", [""])[0].strip()
+        today = datetime.now().date()
+        try:
+            start_date = datetime.strptime(start, "%Y-%m-%d").date() if start else today
+            end_date = datetime.strptime(end, "%Y-%m-%d").date() if end else start_date + timedelta(days=30)
+        except ValueError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "日期格式无效")
+            return
+        if (end_date - start_date).days > 120:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "查询范围不能超过 120 天")
+            return
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            _user, student_ids = scope
+            if not student_ids:
+                self.send_json([])
+                return
+            placeholders = ", ".join("?" for _ in student_ids)
+            rows = db.execute(
+                f"""
+                SELECT c.*, p.name AS course_name, p.color AS course_color,
+                    t.display_name AS teacher_name, r.name AS room_name, r.code AS room_code,
+                    s.id AS student_id, s.name AS student_name
+                FROM class_students cs
+                JOIN students s ON s.id = cs.student_id
+                JOIN classes c ON c.id = cs.class_id
+                JOIN courses p ON p.id = c.course_id
+                JOIN teachers t ON t.id = c.teacher_id
+                JOIN rooms r ON r.id = c.room_id
+                WHERE cs.student_id IN ({placeholders})
+                  AND c.status IN ('招生中', '进行中')
+                  AND c.start_date <= ? AND c.end_date >= ?
+                ORDER BY c.weekday, c.start_time, s.name
+                """,
+                (*student_ids, end_date.isoformat(), start_date.isoformat()),
+            ).fetchall()
+        lessons = []
+        day_count = (end_date - start_date).days
+        for offset in range(day_count + 1):
+            current = start_date + timedelta(days=offset)
+            date_text = current.isoformat()
+            for row in rows:
+                if int(row["weekday"]) != current.weekday():
+                    continue
+                if str(row["start_date"]) <= date_text <= str(row["end_date"]):
+                    lessons.append({
+                        "class_id": row["id"],
+                        "class_name": row["name"],
+                        "student_id": row["student_id"],
+                        "student_name": row["student_name"],
+                        "course_name": row["course_name"],
+                        "teacher_name": row["teacher_name"],
+                        "room_name": row["room_name"],
+                        "room_code": row["room_code"],
+                        "lesson_date": date_text,
+                        "start_time": row["start_time"],
+                        "end_time": minutes_to_time(time_minutes(row["start_time"], "开始时间") + int(row["duration"])),
+                        "duration": row["duration"],
+                        "color": row["course_color"],
+                    })
+        self.send_json(lessons)
+
+    def get_parent_attendance(self, query: dict) -> None:
+        raw_student_id = query.get("student_id", [""])[0].strip()
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            _user, student_ids = scope
+            if raw_student_id:
+                try:
+                    selected_id = int(raw_student_id)
+                except ValueError:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "学员编号无效")
+                    return
+                if selected_id not in student_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "不能查看未绑定学员")
+                    return
+                student_ids = [selected_id]
+            if not student_ids:
+                self.send_json([])
+                return
+            placeholders = ", ".join("?" for _ in student_ids)
+            rows = db.execute(
+                f"""
+                SELECT a.*, s.name AS student_name, c.name AS class_name, t.display_name AS teacher_name
+                FROM class_attendance a
+                JOIN students s ON s.id = a.student_id
+                JOIN classes c ON c.id = a.class_id
+                LEFT JOIN teachers t ON t.id = a.teacher_id
+                WHERE a.student_id IN ({placeholders})
+                ORDER BY a.lesson_date DESC, a.id DESC
+                LIMIT 200
+                """,
+                tuple(student_ids),
+            ).fetchall()
+        self.send_json([dict(row) | {"status_label": ATTENDANCE_STATUSES.get(row["status"], row["status"])} for row in rows])
+
+    def get_parent_payments(self, query: dict) -> None:
+        raw_student_id = query.get("student_id", [""])[0].strip()
+        with connect() as db:
+            scope = self.current_parent_scope(db)
+            if scope is None:
+                return
+            _user, student_ids = scope
+            if raw_student_id:
+                try:
+                    selected_id = int(raw_student_id)
+                except ValueError:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "学员编号无效")
+                    return
+                if selected_id not in student_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "不能查看未绑定学员")
+                    return
+                student_ids = [selected_id]
+            if not student_ids:
+                self.send_json([])
+                return
+            placeholders = ", ".join("?" for _ in student_ids)
+            rows = db.execute(
+                f"""
+                SELECT p.*, s.name AS student_name, s.course AS course_name,
+                    s.hours AS balance_after, u.name AS operator_name
+                FROM payments p
+                JOIN students s ON s.id = p.student_id
+                LEFT JOIN users u ON u.id = p.operator_id
+                WHERE p.student_id IN ({placeholders})
+                ORDER BY p.paid_at DESC, p.id DESC
+                LIMIT 200
+                """,
+                tuple(student_ids),
+            ).fetchall()
+        self.send_json([payment_to_dict(row) for row in rows])
+
+    def update_own_profile(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        try:
+            data = validate_profile(self.read_json())
+            data.update({"id": user["id"], "username": data["phone"], "updated_at": datetime.now().isoformat(timespec="seconds")})
+            with connect() as db:
+                db.execute(
+                    """
+                    UPDATE users SET username=:username, phone=:phone, name=:name,
+                        avatar_text=:avatar_text, avatar_color=:avatar_color, avatar_image=:avatar_image, updated_at=:updated_at
+                    WHERE id=:id AND active = 1
+                    """,
+                    data,
+                )
+                row = db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "该手机号已被其他账号使用")
+            return
+        self.send_json({"user": user_to_dict(row)})
+
+    def update_own_password(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        try:
+            data = validate_password_change(self.read_json())
+            with connect() as db:
+                row = db.execute("SELECT * FROM users WHERE id = ? AND active = 1", (user["id"],)).fetchone()
+                if not row or not verify_password(data["current_password"], row["password_hash"]):
+                    raise ValueError("当前密码不正确")
+                db.execute(
+                    "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                    (hash_password(data["new_password"]), datetime.now().isoformat(timespec="seconds"), user["id"]),
+                )
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"changed": True})
+
+    def update_own_todos(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        try:
+            todos = validate_dashboard_todos(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                db.execute("DELETE FROM dashboard_todos WHERE user_id = ?", (user["id"],))
+                db.executemany(
+                    """
+                    INSERT INTO dashboard_todos
+                        (user_id, title, description, time_label, color, position, created_at, updated_at)
+                    VALUES (:user_id, :title, :description, :time_label, :color, :position, :created_at, :updated_at)
+                    """,
+                    [
+                        {**todo, "user_id": user["id"], "created_at": now, "updated_at": now}
+                        for todo in todos
+                    ],
+                )
+                rows = db.execute(
+                    "SELECT * FROM dashboard_todos WHERE user_id = ? ORDER BY position, id",
+                    (user["id"],),
+                ).fetchall()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"todos": [dashboard_todo_to_dict(row) for row in rows]})
+
+    def update_own_teacher_profile(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        if user["role"] != "teacher":
+            self.send_error_json(HTTPStatus.FORBIDDEN, "只有教师账号可以编辑自己的教师简介")
+            return
+        try:
+            data = validate_teacher_profile(self.read_json())
+            with connect() as db:
+                teacher_ids = own_teacher_ids_for_user(db, user)
+                if not teacher_ids:
+                    raise ValueError("没有找到与当前账号匹配的教师档案，请让校长检查教师姓名或手机号")
+                placeholders = ", ".join("?" for _ in teacher_ids)
+                db.execute(
+                    f"UPDATE teachers SET specialty = ? WHERE id IN ({placeholders})",
+                    (data["specialty"], *teacher_ids),
+                )
+                rows = db.execute(
+                    f"SELECT * FROM teachers WHERE id IN ({placeholders}) ORDER BY id",
+                    tuple(teacher_ids),
+                ).fetchall()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"teachers": [teacher_to_dict(row) for row in rows]})
+
+    def get_lead_goal(self) -> None:
+        with connect() as db:
+            target = int(get_app_setting(db, "lead_goal_target", "25") or 25)
+            completed = current_month_enrollment_count(db)
+        self.send_json(lead_goal_to_dict(completed, max(1, target)))
+
+    def update_lead_goal(self) -> None:
+        user = self.current_user()
+        if not user:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "请先登录")
+            return
+        if user["role"] not in {"owner", "academic", "sales"}:
+            self.send_error_json(HTTPStatus.FORBIDDEN, "当前角色不能编辑招生目标")
+            return
+        try:
+            data = validate_lead_goal(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                key = "lead_goal_target"
+                value = str(data["target"])
+                existing = db.execute("SELECT setting_key FROM app_settings WHERE setting_key = ?", (key,)).fetchone()
+                if existing:
+                    db.execute(
+                        "UPDATE app_settings SET setting_value = ?, updated_at = ? WHERE setting_key = ?",
+                        (value, now, key),
+                    )
+                else:
+                    db.execute(
+                        "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
+                        (key, value, now),
+                    )
+                completed = current_month_enrollment_count(db)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(lead_goal_to_dict(completed, data["target"]))
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
@@ -887,6 +1922,31 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/session":
             self.get_session()
+            return
+        if parsed.path == "/api/parent/me":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_me()
+            return
+        if parsed.path == "/api/parent/students":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_students()
+            return
+        if parsed.path == "/api/parent/schedule":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_schedule(parse_qs(parsed.query))
+            return
+        if parsed.path == "/api/parent/attendance":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_attendance(parse_qs(parsed.query))
+            return
+        if parsed.path == "/api/parent/payments":
+            if not self.require_permission("parent:read"):
+                return
+            self.get_parent_payments(parse_qs(parsed.query))
             return
         if parsed.path == "/api/users":
             if not self.require_permission("settings:read"):
@@ -908,6 +1968,37 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.get_dashboard()
             return
+        if parsed.path == "/api/lead-goal":
+            if not self.require_permission("dashboard:read"):
+                return
+            self.get_lead_goal()
+            return
+        if parsed.path == "/api/hour-transactions":
+            if not self.require_permission("hours:read"):
+                return
+            self.get_hour_transactions()
+            return
+        if parsed.path == "/api/payments":
+            if not self.require_permission("payments:read"):
+                return
+            self.get_payments()
+            return
+        if parsed.path == "/api/leads":
+            if not self.require_permission("leads:read"):
+                return
+            self.get_leads(parse_qs(parsed.query))
+            return
+        if parsed.path == "/api/trials":
+            if not self.require_permission("leads:read"):
+                return
+            self.get_trials()
+            return
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "attendance":
+            if not self.require_permission("hours:read"):
+                return
+            self.get_attendance(parts[2], parse_qs(parsed.query))
+            return
         if parsed.path.startswith("/api/"):
             self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
             return
@@ -926,6 +2017,12 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/login":
             self.login()
             return
+        if path == "/api/wechat/login":
+            self.wechat_login()
+            return
+        if path == "/api/wechat/bind":
+            self.wechat_bind()
+            return
         if path == "/api/logout":
             self.logout()
             return
@@ -933,6 +2030,16 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("settings:write"):
                 return
             self.create_user()
+            return
+        if path == "/api/parent/bind":
+            if not self.require_permission("students:write"):
+                return
+            self.bind_parent_student()
+            return
+        if path == "/api/parent/binding-code":
+            if not self.require_permission("students:write"):
+                return
+            self.create_parent_binding_code()
             return
         if path == "/api/students":
             if not self.require_permission("students:write"):
@@ -959,11 +2066,46 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.create_room()
             return
+        if path == "/api/leads":
+            if not self.require_permission("leads:write"):
+                return
+            self.create_lead()
+            return
+        if path == "/api/trials":
+            if not self.require_permission("leads:write"):
+                return
+            self.create_trial()
+            return
+        if path == "/api/hour-transactions":
+            if not self.require_permission("hours:write"):
+                return
+            self.create_hour_transaction()
+            return
+        if path == "/api/payments":
+            if not self.require_permission("payments:write"):
+                return
+            self.create_payment()
+            return
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "students":
             if not self.require_permission("roster:write"):
                 return
             self.enroll_student(parts[2])
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "classes"] and parts[3] == "attendance":
+            if not self.require_permission("hours:write"):
+                return
+            self.save_attendance(parts[2])
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "leads"] and parts[3] == "contact":
+            if not self.require_permission("leads:write"):
+                return
+            self.contact_lead(parts[2])
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "trials"] and parts[3] == "convert":
+            if not self.require_permission("students:write"):
+                return
+            self.convert_trial(parts[2])
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
 
@@ -988,8 +2130,289 @@ class AppHandler(BaseHTTPRequestHandler):
             row = db.execute("SELECT * FROM students WHERE id = ?", (cursor.lastrowid,)).fetchone()
         self.send_json(student_to_dict(row), HTTPStatus.CREATED)
 
+    def bind_parent_student(self) -> None:
+        try:
+            payload = self.read_json()
+            phone = str(payload.get("phone", "")).strip()
+            name = str(payload.get("name", "")).strip()
+            relation = str(payload.get("relation", "家长")).strip() or "家长"
+            student_id = integer_value(payload, "student_id", "学员", 1)
+            if not phone or len(phone) < 7:
+                raise ValueError("请填写有效家长手机号")
+            if not name:
+                raise ValueError("请填写家长姓名")
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                student = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+                if not student:
+                    raise ValueError("学员不存在")
+                parent = db.execute("SELECT * FROM users WHERE phone = ? AND active = 1", (phone,)).fetchone()
+                if parent and parent["role"] != "parent":
+                    raise ValueError("该手机号已是员工账号，不能作为家长账号绑定")
+                if not parent:
+                    cursor = db.execute(
+                        """
+                        INSERT INTO users
+                            (username, phone, password_hash, name, avatar_text, avatar_color, avatar_image, role, active, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, '', 'parent', 1, ?, ?)
+                        """,
+                        (phone, phone, hash_password(DEFAULT_INITIAL_PASSWORD), name, name[:1] or "家", COLORS[1], now, now),
+                    )
+                    parent = db.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+                else:
+                    db.execute(
+                        "UPDATE users SET name = ?, updated_at = ? WHERE id = ?",
+                        (name, now, parent["id"]),
+                    )
+                    parent = db.execute("SELECT * FROM users WHERE id = ?", (parent["id"],)).fetchone()
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO parent_students (parent_user_id, student_id, relation, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (parent["id"], student_id, relation, now),
+                )
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "家长绑定失败，请检查手机号或学员")
+            return
+        self.send_json({
+            "bound": True,
+            "parent": user_to_dict(parent),
+            "student": student_to_dict(student),
+            "initialPassword": DEFAULT_INITIAL_PASSWORD,
+        }, HTTPStatus.CREATED)
+
+    def create_parent_binding_code(self) -> None:
+        try:
+            payload = self.read_json()
+            user = self.current_user()
+            student_id = integer_value(payload, "student_id", "学员", 1)
+            relation = str(payload.get("relation", "家长")).strip() or "家长"
+            now = datetime.now()
+            expires_at = now + timedelta(days=PARENT_BIND_CODE_DAYS)
+            with connect() as db:
+                student = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+                if not student:
+                    raise ValueError("学员不存在")
+                code = generate_parent_binding_code(db)
+                cursor = db.execute(
+                    """
+                    INSERT INTO parent_binding_codes
+                        (code, student_id, created_by, relation, expires_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        code,
+                        student_id,
+                        user["id"] if user else None,
+                        relation,
+                        expires_at.isoformat(timespec="seconds"),
+                        now.isoformat(timespec="seconds"),
+                    ),
+                )
+                row = db.execute("SELECT * FROM parent_binding_codes WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "绑定码生成失败，请重试")
+            return
+        self.send_json(
+            {
+                "id": row["id"],
+                "code": row["code"],
+                "relation": row["relation"],
+                "expiresAt": row["expires_at"],
+                "student": student_to_dict(student),
+            },
+            HTTPStatus.CREATED,
+        )
+
+    def wechat_login(self) -> None:
+        try:
+            payload = self.read_json()
+            auth = exchange_wechat_code(str(payload.get("code", "")).strip())
+            openid = auth["openid"]
+            session_key = auth.get("session_key", "")
+            now = datetime.now()
+            expires_at = now + timedelta(minutes=WECHAT_BIND_TOKEN_MINUTES)
+            with connect() as db:
+                db.execute("DELETE FROM wechat_login_tokens WHERE expires_at <= ?", (now.isoformat(timespec="seconds"),))
+                row = db.execute(
+                    "SELECT * FROM users WHERE wechat_openid = ? AND active = 1",
+                    (openid,),
+                ).fetchone()
+                if row:
+                    if row["role"] != "parent":
+                        raise ValueError("该微信已绑定员工账号，不能登录家长端")
+                    token, row = self.issue_session(db, row["id"])
+                    self.send_json(
+                        {
+                            "needsBinding": False,
+                            "user": user_to_dict(row),
+                            "wechatMode": "official" if WECHAT_APP_ID and WECHAT_APP_SECRET else "development",
+                        },
+                        extra_headers={"Set-Cookie": self.set_session_cookie(token, SESSION_HOURS * 60 * 60)},
+                    )
+                    return
+                bind_token = secrets.token_urlsafe(32)
+                db.execute(
+                    """
+                    INSERT INTO wechat_login_tokens (token, openid, session_key, expires_at, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        bind_token,
+                        openid,
+                        session_key,
+                        expires_at.isoformat(timespec="seconds"),
+                        now.isoformat(timespec="seconds"),
+                    ),
+                )
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"微信登录暂不可用：{exc}")
+            return
+        self.send_json(
+            {
+                "needsBinding": True,
+                "bindToken": bind_token,
+                "expiresAt": expires_at.isoformat(timespec="seconds"),
+                "wechatMode": "official" if WECHAT_APP_ID and WECHAT_APP_SECRET else "development",
+            }
+        )
+
+    def wechat_bind(self) -> None:
+        try:
+            payload = self.read_json()
+            bind_token = str(payload.get("bind_token") or payload.get("bindToken") or "").strip()
+            binding_code = str(payload.get("binding_code") or payload.get("bindingCode") or "").strip().upper()
+            name = str(payload.get("name", "")).strip() or "微信家长"
+            phone = str(payload.get("phone", "")).strip()
+            relation_override = str(payload.get("relation", "")).strip()
+            if not bind_token:
+                raise ValueError("缺少微信绑定 token")
+            if not binding_code:
+                raise ValueError("请输入绑定码")
+            if phone and len(phone) < 7:
+                raise ValueError("手机号格式不正确")
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                pending = db.execute(
+                    "SELECT * FROM wechat_login_tokens WHERE token = ? AND expires_at > ?",
+                    (bind_token, now),
+                ).fetchone()
+                if not pending:
+                    raise ValueError("微信登录已过期，请重新登录")
+                code_row = db.execute(
+                    """
+                    SELECT c.*, s.name AS student_name
+                    FROM parent_binding_codes c
+                    JOIN students s ON s.id = c.student_id
+                    WHERE c.code = ? AND c.used_at = '' AND c.expires_at > ?
+                    """,
+                    (binding_code, now),
+                ).fetchone()
+                if not code_row:
+                    raise ValueError("绑定码无效或已过期")
+                openid = pending["openid"]
+                parent = db.execute(
+                    "SELECT * FROM users WHERE wechat_openid = ? AND active = 1",
+                    (openid,),
+                ).fetchone()
+                if parent and parent["role"] != "parent":
+                    raise ValueError("该微信已绑定员工账号，不能绑定家长端")
+                if not parent and phone:
+                    parent = db.execute("SELECT * FROM users WHERE phone = ? AND active = 1", (phone,)).fetchone()
+                    if parent and parent["role"] != "parent":
+                        raise ValueError("该手机号已是员工账号，不能作为家长账号绑定")
+                    if parent and parent["wechat_openid"] and parent["wechat_openid"] != openid:
+                        raise ValueError("该手机号已绑定其他微信")
+                if parent:
+                    db.execute(
+                        """
+                        UPDATE users
+                        SET name = ?, wechat_openid = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (name, openid, now, parent["id"]),
+                    )
+                    parent_id = parent["id"]
+                else:
+                    wx_phone = phone or f"wx_{hashlib.sha256(openid.encode('utf-8')).hexdigest()[:24]}"
+                    cursor = db.execute(
+                        """
+                        INSERT INTO users
+                            (username, phone, password_hash, name, avatar_text, avatar_color, avatar_image,
+                             wechat_openid, role, active, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, '', ?, 'parent', 1, ?, ?)
+                        """,
+                        (
+                            wx_phone,
+                            wx_phone,
+                            hash_password(DEFAULT_INITIAL_PASSWORD),
+                            name,
+                            name[:1] or "家",
+                            COLORS[1],
+                            openid,
+                            now,
+                            now,
+                        ),
+                    )
+                    parent_id = cursor.lastrowid
+                relation = relation_override or code_row["relation"] or "家长"
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO parent_students (parent_user_id, student_id, relation, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (parent_id, code_row["student_id"], relation, now),
+                )
+                db.execute(
+                    "UPDATE parent_binding_codes SET used_by = ?, used_at = ? WHERE id = ?",
+                    (parent_id, now, code_row["id"]),
+                )
+                db.execute("DELETE FROM wechat_login_tokens WHERE token = ?", (bind_token,))
+                token, parent = self.issue_session(db, parent_id)
+                student = db.execute("SELECT * FROM students WHERE id = ?", (code_row["student_id"],)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except sqlite3.IntegrityError:
+            self.send_error_json(HTTPStatus.CONFLICT, "微信绑定失败，请检查手机号或绑定码")
+            return
+        self.send_json(
+            {
+                "bound": True,
+                "user": user_to_dict(parent),
+                "student": student_to_dict(student),
+            },
+            HTTPStatus.CREATED,
+            extra_headers={"Set-Cookie": self.set_session_cookie(token, SESSION_HOURS * 60 * 60)},
+        )
+
     def do_PUT(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/me/profile":
+            self.update_own_profile()
+            return
+        if path == "/api/me/password":
+            self.update_own_password()
+            return
+        if path == "/api/me/todos":
+            self.update_own_todos()
+            return
+        if path == "/api/me/teacher-profile":
+            self.update_own_teacher_profile()
+            return
+        if path == "/api/lead-goal":
+            self.update_lead_goal()
+            return
         parts = path.strip("/").split("/")
         if len(parts) != 3 or parts[0] != "api":
             self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
@@ -1029,6 +2452,16 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.require_permission("settings:write"):
                 return
             self.update_user(item_id)
+            return
+        if resource == "leads":
+            if not self.require_permission("leads:write"):
+                return
+            self.update_lead(item_id)
+            return
+        if resource == "trials":
+            if not self.require_permission("leads:write"):
+                return
+            self.update_trial(item_id)
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
 
@@ -1098,7 +2531,557 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.delete_user(item_id)
             return
+        if parts[1] == "leads":
+            if not self.require_permission("leads:write"):
+                return
+            self.delete_lead(item_id)
+            return
         self.send_error_json(HTTPStatus.NOT_FOUND, "接口不存在")
+
+    def trial_teacher_filter(self, db: sqlite3.Connection) -> list[int] | None:
+        current = self.current_user()
+        if current and current["role"] == "teacher":
+            return teacher_ids_for_user(db, current)
+        return None
+
+    def trial_row(self, db: sqlite3.Connection, trial_id: int) -> sqlite3.Row | None:
+        return db.execute(
+            """
+            SELECT tl.*, t.display_name AS teacher_name, t.color AS teacher_color,
+                r.name AS room_name, r.code AS room_code, l.stage AS lead_stage
+            FROM trial_lessons tl
+            JOIN teachers t ON t.id = tl.teacher_id
+            JOIN rooms r ON r.id = tl.room_id
+            LEFT JOIN leads l ON l.id = tl.lead_id
+            WHERE tl.id = ?
+            """,
+            (trial_id,),
+        ).fetchone()
+
+    def get_trials(self) -> None:
+        with connect() as db:
+            allowed_teacher_ids = self.trial_teacher_filter(db)
+            if allowed_teacher_ids == []:
+                self.send_json([])
+                return
+            where_sql = ""
+            params: tuple = ()
+            if allowed_teacher_ids is not None:
+                placeholders = ", ".join("?" for _ in allowed_teacher_ids)
+                where_sql = f"WHERE tl.teacher_id IN ({placeholders})"
+                params = tuple(allowed_teacher_ids)
+            rows = db.execute(
+                f"""
+                SELECT tl.*, t.display_name AS teacher_name, t.color AS teacher_color,
+                    r.name AS room_name, r.code AS room_code, l.stage AS lead_stage
+                FROM trial_lessons tl
+                JOIN teachers t ON t.id = tl.teacher_id
+                JOIN rooms r ON r.id = tl.room_id
+                LEFT JOIN leads l ON l.id = tl.lead_id
+                {where_sql}
+                ORDER BY tl.scheduled_at DESC, tl.id DESC
+                """,
+                params,
+            ).fetchall()
+        self.send_json([trial_to_dict(row) for row in rows])
+
+    def create_trial(self) -> None:
+        try:
+            data = validate_trial(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                allowed_teacher_ids = self.trial_teacher_filter(db)
+                if allowed_teacher_ids is not None and data["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能为该老师预约试听")
+                    return
+                if data["lead_id"] and not db.execute("SELECT id FROM leads WHERE id = ?", (data["lead_id"],)).fetchone():
+                    raise ValueError("关联线索不存在")
+                if not db.execute("SELECT id FROM teachers WHERE id = ? AND active = 1", (data["teacher_id"],)).fetchone():
+                    raise ValueError("试听老师不存在")
+                if not db.execute("SELECT id FROM rooms WHERE id = ? AND active = 1", (data["room_id"],)).fetchone():
+                    raise ValueError("试听教室不存在")
+                cursor = db.execute(
+                    """
+                    INSERT INTO trial_lessons
+                        (lead_id, child_name, age, phone, course_interest, teacher_id, room_id,
+                         scheduled_at, duration_minutes, status, result, note, created_at, updated_at)
+                    VALUES (:lead_id, :child_name, :age, :phone, :course_interest, :teacher_id, :room_id,
+                            :scheduled_at, :duration_minutes, :status, :result, :note, :created_at, :updated_at)
+                    """,
+                    {**data, "created_at": now, "updated_at": now},
+                )
+                if data["lead_id"]:
+                    db.execute(
+                        """
+                        UPDATE leads SET stage = '待试听', next_follow_at = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (data["scheduled_at"], now, data["lead_id"]),
+                    )
+                row = self.trial_row(db, cursor.lastrowid)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(trial_to_dict(row), HTTPStatus.CREATED)
+
+    def update_trial(self, trial_id: int) -> None:
+        try:
+            data = validate_trial(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                existing = db.execute("SELECT * FROM trial_lessons WHERE id = ?", (trial_id,)).fetchone()
+                if not existing:
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "试听课不存在")
+                    return
+                allowed_teacher_ids = self.trial_teacher_filter(db)
+                if allowed_teacher_ids is not None and existing["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能修改该试听课")
+                    return
+                if allowed_teacher_ids is not None and data["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能转给其他老师")
+                    return
+                if data["lead_id"] and not db.execute("SELECT id FROM leads WHERE id = ?", (data["lead_id"],)).fetchone():
+                    raise ValueError("关联线索不存在")
+                if not db.execute("SELECT id FROM teachers WHERE id = ? AND active = 1", (data["teacher_id"],)).fetchone():
+                    raise ValueError("试听老师不存在")
+                if not db.execute("SELECT id FROM rooms WHERE id = ? AND active = 1", (data["room_id"],)).fetchone():
+                    raise ValueError("试听教室不存在")
+                db.execute(
+                    """
+                    UPDATE trial_lessons SET
+                        lead_id=:lead_id, child_name=:child_name, age=:age, phone=:phone,
+                        course_interest=:course_interest, teacher_id=:teacher_id, room_id=:room_id,
+                        scheduled_at=:scheduled_at, duration_minutes=:duration_minutes,
+                        status=:status, result=:result, note=:note, updated_at=:updated_at
+                    WHERE id=:id
+                    """,
+                    {**data, "id": trial_id, "updated_at": now},
+                )
+                if data["lead_id"] and data["status"] == "待试听":
+                    db.execute(
+                        "UPDATE leads SET stage = '待试听', next_follow_at = ?, updated_at = ? WHERE id = ?",
+                        (data["scheduled_at"], now, data["lead_id"]),
+                    )
+                row = self.trial_row(db, trial_id)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(trial_to_dict(row))
+
+    def convert_trial(self, raw_trial_id: str) -> None:
+        try:
+            trial_id = int(raw_trial_id)
+        except ValueError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "编号无效")
+            return
+        now = datetime.now().isoformat(timespec="seconds")
+        with connect() as db:
+            trial = db.execute("SELECT * FROM trial_lessons WHERE id = ?", (trial_id,)).fetchone()
+            if not trial:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "试听课不存在")
+                return
+            if trial["student_id"]:
+                student = db.execute("SELECT * FROM students WHERE id = ?", (trial["student_id"],)).fetchone()
+                self.send_json({"converted": True, "student": student_to_dict(student), "trial": trial_to_dict(self.trial_row(db, trial_id))})
+                return
+            cursor = db.execute(
+                """
+                INSERT INTO students
+                    (name, age, parent, phone, course, hours, status, color, note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 0, '待分班', ?, ?, ?, ?)
+                """,
+                (
+                    trial["child_name"], trial["age"], "试听家长", trial["phone"],
+                    trial["course_interest"] or "待确认", COLORS[trial_id % len(COLORS)],
+                    f"由试听课转入。试听结果：{trial['result']}。{trial['note']}".strip(),
+                    now, now,
+                ),
+            )
+            student = db.execute("SELECT * FROM students WHERE id = ?", (cursor.lastrowid,)).fetchone()
+            db.execute(
+                """
+                UPDATE trial_lessons SET status = '已转正', student_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (cursor.lastrowid, now, trial_id),
+            )
+            if trial["lead_id"]:
+                db.execute(
+                    "UPDATE leads SET stage = '已报名', updated_at = ? WHERE id = ?",
+                    (now, trial["lead_id"]),
+                )
+            trial_row = self.trial_row(db, trial_id)
+        self.send_json({"converted": True, "student": student_to_dict(student), "trial": trial_to_dict(trial_row)})
+
+    def get_leads(self, query: dict) -> None:
+        stage = query.get("stage", [""])[0].strip()
+        sql = "SELECT * FROM leads"
+        params: tuple = ()
+        if stage:
+            sql += " WHERE stage = ?"
+            params = (stage,)
+        sql += " ORDER BY updated_at DESC, id DESC"
+        with connect() as db:
+            rows = db.execute(sql, params).fetchall()
+        self.send_json([lead_to_dict(row) for row in rows])
+
+    def create_lead(self) -> None:
+        try:
+            data = validate_lead(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            with connect() as db:
+                cursor = db.execute(
+                    """
+                    INSERT INTO leads
+                        (name, age, phone, source, stage, tag, note, next_follow_at, created_at, updated_at)
+                    VALUES (:name, :age, :phone, :source, :stage, :tag, :note, :next_follow_at, :created_at, :updated_at)
+                    """,
+                    {**data, "created_at": now, "updated_at": now},
+                )
+                row = db.execute("SELECT * FROM leads WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(lead_to_dict(row), HTTPStatus.CREATED)
+
+    def update_lead(self, lead_id: int) -> None:
+        try:
+            data = validate_lead(self.read_json())
+            data.update({"id": lead_id, "updated_at": datetime.now().isoformat(timespec="seconds")})
+            with connect() as db:
+                if not db.execute("SELECT id FROM leads WHERE id = ?", (lead_id,)).fetchone():
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "线索不存在")
+                    return
+                db.execute(
+                    """
+                    UPDATE leads SET
+                        name=:name, age=:age, phone=:phone, source=:source, stage=:stage,
+                        tag=:tag, note=:note, next_follow_at=:next_follow_at, updated_at=:updated_at
+                    WHERE id=:id
+                    """,
+                    data,
+                )
+                row = db.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(lead_to_dict(row))
+
+    def contact_lead(self, raw_lead_id: str) -> None:
+        try:
+            lead_id = int(raw_lead_id)
+        except ValueError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "编号无效")
+            return
+        now = datetime.now().isoformat(timespec="seconds")
+        with connect() as db:
+            row = db.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+            if not row:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "线索不存在")
+                return
+            next_stage = "已联系" if row["stage"] == "新线索" else row["stage"]
+            db.execute(
+                """
+                UPDATE leads SET stage = ?, follow_count = follow_count + 1,
+                    last_contact_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_stage, now, now, lead_id),
+            )
+            row = db.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        self.send_json(lead_to_dict(row))
+
+    def delete_lead(self, lead_id: int) -> None:
+        with connect() as db:
+            cursor = db.execute("DELETE FROM leads WHERE id = ?", (lead_id,))
+        if cursor.rowcount == 0:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "线索不存在")
+            return
+        self.send_json({"deleted": True, "id": lead_id})
+
+    def get_hour_transactions(self) -> None:
+        with connect() as db:
+            teacher_ids = teacher_ids_for_user(db, self.current_user())
+            where_sql = ""
+            params: tuple = ()
+            if teacher_ids == []:
+                self.send_json([])
+                return
+            if teacher_ids is not None:
+                placeholders = ", ".join("?" for _ in teacher_ids)
+                where_sql = f"WHERE h.teacher_id IN ({placeholders})"
+                params = tuple(teacher_ids)
+            rows = db.execute(
+                f"""
+                SELECT h.*, s.name AS student_name, s.course AS course_name,
+                    t.display_name AS teacher_name, u.name AS operator_name
+                FROM hour_transactions h
+                JOIN students s ON s.id = h.student_id
+                LEFT JOIN teachers t ON t.id = h.teacher_id
+                LEFT JOIN users u ON u.id = h.operator_id
+                {where_sql}
+                ORDER BY h.occurred_at DESC, h.id DESC
+                LIMIT 200
+                """,
+                params,
+            ).fetchall()
+        self.send_json([hour_transaction_to_dict(row) for row in rows])
+
+    def create_hour_transaction(self) -> None:
+        try:
+            data = validate_hour_transaction(self.read_json())
+            label, sign = HOUR_ACTIONS[data["action"]]
+            delta = data["amount"] * sign
+            now = datetime.now().isoformat(timespec="seconds")
+            current_user = self.current_user()
+            with connect() as db:
+                allowed_teacher_ids = teacher_ids_for_user(db, current_user)
+                if allowed_teacher_ids is not None and data["teacher_id"] not in allowed_teacher_ids:
+                    raise ValueError("当前账号不能为该教师记录课时")
+                teacher = db.execute("SELECT id FROM teachers WHERE id = ? AND active = 1", (data["teacher_id"],)).fetchone()
+                if not teacher:
+                    raise ValueError("教师不存在")
+                student = db.execute("SELECT * FROM students WHERE id = ?", (data["student_id"],)).fetchone()
+                if not student:
+                    raise ValueError("学员不存在")
+                if not student_belongs_to_teacher(db, data["teacher_id"], data["student_id"]):
+                    raise ValueError("该学员不在该教师名下，不能记录课时变动")
+                balance_after = float(student["hours"]) + delta
+                if balance_after < 0:
+                    raise ValueError(f"{student['name']} 当前仅剩 {format_number(student['hours'])} 课时，不能{label} {format_number(data['amount'])} 课时")
+                db.execute(
+                    "UPDATE students SET hours = ?, updated_at = ? WHERE id = ?",
+                    (balance_after, now, data["student_id"]),
+                )
+                cursor = db.execute(
+                    """
+                    INSERT INTO hour_transactions
+                        (student_id, teacher_id, action, amount, delta, balance_after, note, operator_id, occurred_at, created_at)
+                    VALUES (:student_id, :teacher_id, :action, :amount, :delta, :balance_after, :note, :operator_id, :occurred_at, :created_at)
+                    """,
+                    {
+                        **data,
+                        "delta": delta,
+                        "balance_after": balance_after,
+                        "operator_id": current_user["id"] if current_user else None,
+                        "created_at": now,
+                    },
+                )
+                row = db.execute(
+                    """
+                    SELECT h.*, s.name AS student_name, s.course AS course_name,
+                        t.display_name AS teacher_name, u.name AS operator_name
+                    FROM hour_transactions h
+                    JOIN students s ON s.id = h.student_id
+                    LEFT JOIN teachers t ON t.id = h.teacher_id
+                    LEFT JOIN users u ON u.id = h.operator_id
+                    WHERE h.id = ?
+                    """,
+                    (cursor.lastrowid,),
+                ).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(hour_transaction_to_dict(row), HTTPStatus.CREATED)
+
+    def get_payments(self) -> None:
+        with connect() as db:
+            rows = db.execute(
+                """
+                SELECT p.*, s.name AS student_name, s.course AS course_name,
+                    s.hours AS balance_after, u.name AS operator_name
+                FROM payments p
+                JOIN students s ON s.id = p.student_id
+                LEFT JOIN users u ON u.id = p.operator_id
+                ORDER BY p.paid_at DESC, p.id DESC
+                LIMIT 300
+                """
+            ).fetchall()
+        self.send_json([payment_to_dict(row) for row in rows])
+
+    def create_payment(self) -> None:
+        try:
+            data = validate_payment(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            current_user = self.current_user()
+            with connect() as db:
+                student = db.execute("SELECT * FROM students WHERE id = ?", (data["student_id"],)).fetchone()
+                if not student:
+                    raise ValueError("学员不存在")
+                balance_after = float(student["hours"]) + float(data["hours_added"])
+                cursor = db.execute(
+                    """
+                    INSERT INTO payments
+                        (student_id, payment_type, amount_paid, hours_added, payment_method,
+                         paid_at, note, operator_id, created_at)
+                    VALUES (:student_id, :payment_type, :amount_paid, :hours_added, :payment_method,
+                            :paid_at, :note, :operator_id, :created_at)
+                    """,
+                    {
+                        **data,
+                        "operator_id": current_user["id"] if current_user else None,
+                        "created_at": now,
+                    },
+                )
+                if data["hours_added"] > 0:
+                    db.execute(
+                        "UPDATE students SET hours = ?, status = '在读', updated_at = ? WHERE id = ?",
+                        (balance_after, now, data["student_id"]),
+                    )
+                    db.execute(
+                        """
+                        INSERT INTO hour_transactions
+                            (student_id, teacher_id, action, amount, delta, balance_after, note, operator_id, occurred_at, created_at)
+                        VALUES (?, NULL, 'purchase', ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            data["student_id"], data["hours_added"], data["hours_added"], balance_after,
+                            f"{data['payment_type']}：{format_number(data['amount_paid'])} 元，{data['payment_method']}。{data['note']}".strip(),
+                            current_user["id"] if current_user else None, data["paid_at"], now,
+                        ),
+                    )
+                row = db.execute(
+                    """
+                    SELECT p.*, s.name AS student_name, s.course AS course_name,
+                        s.hours AS balance_after, u.name AS operator_name
+                    FROM payments p
+                    JOIN students s ON s.id = p.student_id
+                    LEFT JOIN users u ON u.id = p.operator_id
+                    WHERE p.id = ?
+                    """,
+                    (cursor.lastrowid,),
+                ).fetchone()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json(payment_to_dict(row), HTTPStatus.CREATED)
+
+    def get_attendance(self, raw_class_id: str, query: dict) -> None:
+        try:
+            class_id = int(raw_class_id)
+            lesson_date = validate_lesson_date(query.get("date", [""])[0])
+            with connect() as db:
+                class_row = db.execute("SELECT * FROM classes WHERE id = ?", (class_id,)).fetchone()
+                if not class_row:
+                    raise ValueError("班级不存在")
+                allowed_teacher_ids = teacher_ids_for_user(db, self.current_user())
+                if allowed_teacher_ids is not None and class_row["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能查看该班点名")
+                    return
+                rows = db.execute(
+                    """
+                    SELECT a.*, s.name AS student_name
+                    FROM class_attendance a
+                    JOIN students s ON s.id = a.student_id
+                    WHERE a.class_id = ? AND a.lesson_date = ?
+                    ORDER BY s.name
+                    """,
+                    (class_id, lesson_date),
+                ).fetchall()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({
+            "class_id": class_id,
+            "lesson_date": lesson_date,
+            "records": [dict(row) | {"status_label": ATTENDANCE_STATUSES.get(row["status"], row["status"])} for row in rows],
+        })
+
+    def save_attendance(self, raw_class_id: str) -> None:
+        try:
+            class_id = int(raw_class_id)
+            payload = validate_attendance_payload(self.read_json())
+            now = datetime.now().isoformat(timespec="seconds")
+            current_user = self.current_user()
+            with connect() as db:
+                class_row = db.execute(
+                    """
+                    SELECT c.*, p.name AS course_name, t.display_name AS teacher_name
+                    FROM classes c
+                    JOIN courses p ON p.id = c.course_id
+                    JOIN teachers t ON t.id = c.teacher_id
+                    WHERE c.id = ?
+                    """,
+                    (class_id,),
+                ).fetchone()
+                if not class_row:
+                    raise ValueError("班级不存在")
+                allowed_teacher_ids = teacher_ids_for_user(db, current_user)
+                if allowed_teacher_ids is not None and class_row["teacher_id"] not in allowed_teacher_ids:
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "当前账号不能为该班点名")
+                    return
+                if not class_occurs_on_date(class_row, payload["lesson_date"]):
+                    raise ValueError("所选日期不是该班的上课日")
+                roster_ids = {
+                    row["student_id"]
+                    for row in db.execute("SELECT student_id FROM class_students WHERE class_id = ?", (class_id,)).fetchall()
+                }
+                submitted_ids = {record["student_id"] for record in payload["records"]}
+                if not submitted_ids.issubset(roster_ids):
+                    raise ValueError("点名记录包含非本班学员")
+                lesson_hours = round(float(class_row["duration"]) / 60, 2)
+                saved = []
+                for record in payload["records"]:
+                    student = db.execute("SELECT * FROM students WHERE id = ?", (record["student_id"],)).fetchone()
+                    if not student:
+                        raise ValueError("学员不存在")
+                    existing = db.execute(
+                        """
+                        SELECT * FROM class_attendance
+                        WHERE class_id = ? AND student_id = ? AND lesson_date = ?
+                        """,
+                        (class_id, record["student_id"], payload["lesson_date"]),
+                    ).fetchone()
+                    old_delta = float(existing["hours_delta"]) if existing else 0
+                    new_delta = -lesson_hours if record["status"] == "present" else 0
+                    diff = new_delta - old_delta
+                    balance_after = float(student["hours"]) + diff
+                    if balance_after < 0:
+                        raise ValueError(f"{student['name']} 当前仅剩 {format_number(student['hours'])} 课时，无法自动消课 {format_number(lesson_hours)} 课时")
+                    if diff:
+                        action = "consume" if diff < 0 else "return"
+                        label = ATTENDANCE_STATUSES[record["status"]]
+                        db.execute(
+                            "UPDATE students SET hours = ?, updated_at = ? WHERE id = ?",
+                            (balance_after, now, record["student_id"]),
+                        )
+                        db.execute(
+                            """
+                            INSERT INTO hour_transactions
+                                (student_id, teacher_id, action, amount, delta, balance_after, note, operator_id, occurred_at, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                record["student_id"], class_row["teacher_id"], action, abs(diff), diff, balance_after,
+                                f"{payload['lesson_date']} {class_row['name']} 点名：{label}",
+                                current_user["id"] if current_user else None, now, now,
+                            ),
+                        )
+                    if existing:
+                        db.execute(
+                            """
+                            UPDATE class_attendance
+                            SET status = ?, hours_delta = ?, note = ?, recorded_by = ?, recorded_at = ?, updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (record["status"], new_delta, record["note"], current_user["id"] if current_user else None, now, now, existing["id"]),
+                        )
+                        attendance_id = existing["id"]
+                    else:
+                        cursor = db.execute(
+                            """
+                            INSERT INTO class_attendance
+                                (class_id, student_id, teacher_id, lesson_date, status, hours_delta, note, recorded_by, recorded_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (class_id, record["student_id"], class_row["teacher_id"], payload["lesson_date"], record["status"], new_delta, record["note"], current_user["id"] if current_user else None, now, now),
+                        )
+                        attendance_id = cursor.lastrowid
+                    saved.append({"id": attendance_id, **record, "hours_delta": new_delta})
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"saved": True, "class_id": class_id, "lesson_date": payload["lesson_date"], "records": saved})
 
     def get_users(self) -> None:
         with connect() as db:
@@ -1114,14 +3097,16 @@ class AppHandler(BaseHTTPRequestHandler):
             with connect() as db:
                 cursor = db.execute(
                     """
-                    INSERT INTO users (username, phone, password_hash, name, role, active, created_at, updated_at)
-                    VALUES (:username, :phone, :password_hash, :name, :role, 1, :created_at, :updated_at)
+                    INSERT INTO users (username, phone, password_hash, name, avatar_text, avatar_color, avatar_image, role, active, created_at, updated_at)
+                    VALUES (:username, :phone, :password_hash, :name, :avatar_text, :avatar_color, '', :role, 1, :created_at, :updated_at)
                     """,
                     {
                         "username": data["phone"],
                         "phone": data["phone"],
                         "password_hash": hash_password(data["password"]),
                         "name": data["name"],
+                        "avatar_text": data["name"][:1] or "员",
+                        "avatar_color": COLORS[0],
                         "role": data["role"],
                         "created_at": now,
                         "updated_at": now,
@@ -1392,8 +3377,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 cursor = db.execute(
                     """
                     INSERT INTO classes
-                        (name, course_id, teacher_id, room_id, weekday, start_time, duration, capacity, status, created_at, updated_at)
-                    VALUES (:name, :course_id, :teacher_id, :room_id, :weekday, :start_time, :duration, :capacity, :status, :created_at, :updated_at)
+                        (name, course_id, teacher_id, room_id, start_date, end_date, weekday, start_time, duration, capacity, status, created_at, updated_at)
+                    VALUES (:name, :course_id, :teacher_id, :room_id, :start_date, :end_date, :weekday, :start_time, :duration, :capacity, :status, :created_at, :updated_at)
                     """,
                     {**data, "created_at": now, "updated_at": now},
                 )
@@ -1421,7 +3406,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     """
                     UPDATE classes SET
                         name=:name, course_id=:course_id, teacher_id=:teacher_id, room_id=:room_id,
-                        weekday=:weekday, start_time=:start_time, duration=:duration,
+                        start_date=:start_date, end_date=:end_date, weekday=:weekday, start_time=:start_time, duration=:duration,
                         capacity=:capacity, status=:status, updated_at=:updated_at
                     WHERE id=:id
                     """,
@@ -1595,21 +3580,168 @@ class AppHandler(BaseHTTPRequestHandler):
         )
 
     def get_dashboard(self) -> None:
+        user = self.current_user()
         with connect() as db:
-            total = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
-            active = db.execute("SELECT COUNT(*) FROM students WHERE status = '在读'").fetchone()[0]
-            renewals = db.execute("SELECT COUNT(*) FROM students WHERE status = '待续费'").fetchone()[0]
-            hours = db.execute("SELECT COALESCE(SUM(hours), 0) FROM students").fetchone()[0]
-            class_count = db.execute(
-                "SELECT COUNT(*) FROM classes WHERE status IN ('招生中', '进行中')"
-            ).fetchone()[0]
+            role = user["role"] if user else ""
+            teacher_ids: list[int] | None
+            if role == "academic":
+                teacher_ids = None
+                scope = "all"
+                scope_label = "全体教师"
+            elif role in {"owner", "teacher"}:
+                teacher_ids = own_teacher_ids_for_user(db, user)
+                scope = "own"
+                scope_label = "我的授课"
+            else:
+                teacher_ids = None
+                scope = "all"
+                scope_label = "全校数据"
+
+            class_scope_sql = ""
+            student_scope_sql = ""
+            params: tuple = ()
+            if teacher_ids == []:
+                total = active = renewals = class_count = today_total = today_present = 0
+                hours = 0
+                recent_classes = []
+            else:
+                if teacher_ids is not None:
+                    placeholders = ", ".join("?" for _ in teacher_ids)
+                    class_scope_sql = f"AND c.teacher_id IN ({placeholders})"
+                    student_scope_sql = f"""
+                        JOIN class_students cs ON cs.student_id = s.id
+                        JOIN classes c ON c.id = cs.class_id
+                        WHERE c.teacher_id IN ({placeholders})
+                    """
+                    params = tuple(teacher_ids)
+                if teacher_ids is None:
+                    total = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+                    active = db.execute("SELECT COUNT(*) FROM students WHERE status = '在读'").fetchone()[0]
+                    renewals = db.execute("SELECT COUNT(*) FROM students WHERE status = '待续费'").fetchone()[0]
+                    hours = db.execute("SELECT COALESCE(SUM(hours), 0) FROM students").fetchone()[0]
+                else:
+                    student_rows = db.execute(
+                        f"""
+                        SELECT DISTINCT s.id, s.status, s.hours
+                        FROM students s
+                        {student_scope_sql}
+                        """,
+                        params,
+                    ).fetchall()
+                    total = len(student_rows)
+                    active = sum(1 for row in student_rows if row["status"] == "在读")
+                    renewals = sum(1 for row in student_rows if row["status"] == "待续费")
+                    hours = sum(float(row["hours"] or 0) for row in student_rows)
+                class_count = db.execute(
+                    f"""
+                    SELECT COUNT(*) FROM classes c
+                    WHERE c.status IN ('招生中', '进行中') {class_scope_sql}
+                    """,
+                    params,
+                ).fetchone()[0]
+                today = datetime.now().strftime("%Y-%m-%d")
+                weekday = datetime.now().weekday()
+                today_total = db.execute(
+                    f"""
+                    SELECT COUNT(*) FROM class_students cs
+                    JOIN classes c ON c.id = cs.class_id
+                    WHERE c.status IN ('招生中', '进行中')
+                        AND c.weekday = ?
+                        AND c.start_date <= ?
+                        AND c.end_date >= ?
+                        {class_scope_sql}
+                    """,
+                    (weekday, today, today, *params),
+                ).fetchone()[0]
+                today_present = db.execute(
+                    f"""
+                    SELECT COUNT(*) FROM class_attendance a
+                    JOIN classes c ON c.id = a.class_id
+                    WHERE a.lesson_date = ?
+                        AND a.status = 'present'
+                        {class_scope_sql}
+                    """,
+                    (today, *params),
+                ).fetchone()[0]
+                recent_classes = db.execute(
+                    f"""
+                    SELECT c.*, p.name AS course_name, p.color AS course_color,
+                        t.display_name AS teacher_name, t.color AS teacher_color,
+                        r.name AS room_name, r.code AS room_code, r.capacity AS room_capacity,
+                        COUNT(cs.student_id) AS current
+                    FROM classes c
+                    JOIN courses p ON p.id = c.course_id
+                    JOIN teachers t ON t.id = c.teacher_id
+                    JOIN rooms r ON r.id = c.room_id
+                    LEFT JOIN class_students cs ON cs.class_id = c.id
+                    WHERE c.status IN ('招生中', '进行中') {class_scope_sql}
+                    GROUP BY c.id
+                    ORDER BY c.weekday, c.start_time, c.id
+                    """,
+                    params,
+                ).fetchall()
+            teacher_overview = []
+            if role in {"owner", "academic"}:
+                teacher_rows = db.execute(
+                    """
+                    SELECT t.id, t.display_name, t.color, t.specialty,
+                        COUNT(DISTINCT c.id) AS class_count,
+                        COUNT(DISTINCT cs.student_id) AS student_count
+                    FROM teachers t
+                    LEFT JOIN classes c ON c.teacher_id = t.id AND c.status IN ('招生中', '进行中')
+                    LEFT JOIN class_students cs ON cs.class_id = c.id
+                    WHERE t.active = 1
+                    GROUP BY t.id
+                    ORDER BY class_count DESC, t.id
+                    """
+                ).fetchall()
+                teacher_overview = [dict(row) for row in teacher_rows]
+            lead_counts = {
+                row["stage"]: row["count"]
+                for row in db.execute(
+                    "SELECT stage, COUNT(*) AS count FROM leads WHERE stage != '无效' GROUP BY stage"
+                ).fetchall()
+            }
+            trial_counts = {
+                row["status"]: row["count"]
+                for row in db.execute(
+                    "SELECT status, COUNT(*) AS count FROM trial_lessons GROUP BY status"
+                ).fetchall()
+            }
+            month_start = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+            lead_conversion = {
+                "total": sum(lead_counts.values()),
+                "monthNew": db.execute(
+                    "SELECT COUNT(*) FROM leads WHERE stage != '无效' AND date(created_at) >= ?",
+                    (month_start,),
+                ).fetchone()[0],
+                "new": lead_counts.get("新线索", 0),
+                "contacted": lead_counts.get("已联系", 0),
+                "trialScheduled": lead_counts.get("待试听", 0) + trial_counts.get("待试听", 0),
+                "trialCompleted": lead_counts.get("待报名", 0) + trial_counts.get("已试听", 0),
+                "enrolled": lead_counts.get("已报名", 0) + trial_counts.get("已转正", 0),
+            }
+            custom_todo_rows = []
+            if user:
+                custom_todo_rows = db.execute(
+                    "SELECT * FROM dashboard_todos WHERE user_id = ? ORDER BY position, id",
+                    (user["id"],),
+                ).fetchall()
         self.send_json(
             {
+                "scope": scope,
+                "scopeLabel": scope_label,
                 "totalStudents": total,
                 "activeStudents": active,
                 "renewalStudents": renewals,
                 "remainingHours": hours,
                 "activeClasses": class_count,
+                "todayAttendancePresent": today_present,
+                "todayAttendanceTotal": today_total,
+                "recentClasses": [class_to_dict(row) for row in recent_classes],
+                "teacherOverview": teacher_overview,
+                "leadConversion": lead_conversion,
+                "customTodos": [dashboard_todo_to_dict(row) for row in custom_todo_rows],
             }
         )
 
