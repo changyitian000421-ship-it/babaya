@@ -31,6 +31,7 @@ TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
 DATABASE_KIND = "turso" if TURSO_DATABASE_URL else "postgres" if DATABASE_URL else "sqlite"
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "4173"))
+RENDER_GIT_COMMIT = os.environ.get("RENDER_GIT_COMMIT", "local").strip()
 
 STATUSES = {"在读", "待续费", "请假中", "待分班", "停课"}
 COLORS = ["#ff9f1c", "#ffd33d", "#f47a12", "#715b87", "#4f896f"]
@@ -878,7 +879,11 @@ class AppHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            self.send_json({"status": "ok", "database": DATABASE_KIND})
+            self.send_json({
+                "status": "ok",
+                "database": DATABASE_KIND,
+                "release": RENDER_GIT_COMMIT[:12] if RENDER_GIT_COMMIT else "unknown",
+            })
             return
         if parsed.path == "/api/session":
             self.get_session()

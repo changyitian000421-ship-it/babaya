@@ -3,6 +3,9 @@ services:
     name: shengdong-training-system
     runtime: python
     plan: free
+    branch: main
+    autoDeployTrigger: commit
+    healthCheckPath: /api/health
     buildCommand: "pip install -r requirements.txt && python -m py_compile server.py"
     startCommand: "python server.py"
     envVars:
