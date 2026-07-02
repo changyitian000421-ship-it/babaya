@@ -18,6 +18,7 @@ let pendingScheduleFocusId = "";
 let dashboardTodoEditing = false;
 let activeSettingsSection = "root";
 let deferredInstallPrompt = null;
+let installGuideRevealed = false;
 let leadGoal = { completed: 18, target: 25, percent: 72 };
 let dashboardStats = {
   scope: "all",
@@ -175,14 +176,29 @@ function startOfWeek(date) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+  } catch (cause) {
+    const isLocalPage = window.location.protocol === "file:"
+      || ["127.0.0.1", "localhost"].includes(window.location.hostname);
+    const message = navigator.onLine === false
+      ? "当前设备没有网络连接，请联网后重试"
+      : isLocalPage
+        ? "无法连接本地服务。请先运行 python3 server.py，再打开 http://127.0.0.1:4173/"
+        : "无法连接服务器，请检查网络或稍后重试";
+    const error = new Error(message);
+    error.cause = cause;
+    error.code = "NETWORK_ERROR";
+    throw error;
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401 && path !== "/api/session" && path !== "/api/login") {
@@ -1757,56 +1773,144 @@ function settingsAboutMarkup() {
 
 function installEnvironment() {
   const userAgent = navigator.userAgent || "";
-  const isIos = /iPhone|iPad|iPod/i.test(userAgent);
+  const platform = navigator.userAgentData?.platform || navigator.platform || "";
+  const isIos = /iPhone|iPad|iPod/i.test(userAgent)
+    || (/Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/i.test(userAgent);
-  const isWindows = /Windows/i.test(userAgent);
+  const isWindows = /Windows/i.test(`${platform} ${userAgent}`);
   const isMac = /Macintosh|Mac OS X/i.test(userAgent) && !isIos;
+  const isEdge = /EdgA|EdgiOS|Edg\//i.test(userAgent);
+  const isSamsung = /SamsungBrowser/i.test(userAgent);
+  const isOpera = /OPR\/|Opera/i.test(userAgent);
+  const isFirefox = /FxiOS|Firefox/i.test(userAgent);
+  const isChrome = !isEdge && !isSamsung && !isOpera && /CriOS|Chrome|Chromium/i.test(userAgent);
+  const isSafari = !isEdge && !isChrome && !isFirefox && !isOpera && /Safari/i.test(userAgent);
+  const isEmbedded = /Electron|WebView|; wv\)/i.test(userAgent);
   const isStandalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-  return { isIos, isAndroid, isWindows, isMac, isStandalone };
+  const systemLabel = isIos
+    ? "iPhone / iPadOS"
+    : isAndroid
+      ? "Android"
+      : isWindows
+        ? "Windows"
+        : isMac
+          ? "macOS"
+          : /Linux/i.test(`${platform} ${userAgent}`)
+            ? "Linux"
+            : "当前系统";
+  const browserLabel = isEdge
+    ? "Microsoft Edge"
+    : isSamsung
+      ? "三星浏览器"
+      : isOpera
+        ? "Opera"
+        : isFirefox
+          ? "Firefox"
+          : isEmbedded
+            ? "内置浏览器"
+            : isChrome
+              ? "Chrome"
+              : isSafari
+                ? "Safari"
+                : "当前浏览器";
+  return {
+    isIos,
+    isAndroid,
+    isWindows,
+    isMac,
+    isEdge,
+    isFirefox,
+    isChrome,
+    isSafari,
+    isEmbedded,
+    isStandalone,
+    systemLabel,
+    browserLabel,
+    isFilePage: window.location.protocol === "file:",
+  };
 }
 
-function installGuide() {
-  const environment = installEnvironment();
-  if (environment.isIos) {
+function installGuide(environment = installEnvironment()) {
+  if (environment.isFilePage) {
     return {
-      platform: "苹果 iPhone / iPad",
-      note: "苹果系统不允许网页直接完成安装，需要在 Safari 中确认添加。",
-      steps: ["使用 Safari 打开当前网址", "点击底部工具栏的“分享”按钮", "选择“添加到主屏幕”，再点击“添加”"],
+      note: "浏览器不能从本地文件直接安装应用，请改用本地服务器或线上 HTTPS 网址。",
+      steps: ["打开 http://127.0.0.1:4173/ 或 Render 线上网址", "重新点击“立即安装”", "在浏览器弹窗或菜单中确认安装"],
+    };
+  }
+  if (environment.isIos) {
+    if (!environment.isSafari) {
+      return {
+        note: `已识别 ${environment.browserLabel}。请先使用浏览器分享菜单；如果没有添加入口，再改用 Safari。`,
+        steps: ["打开当前浏览器的“分享”菜单", "选择“添加到主屏幕”并确认", "如果菜单中没有此项，请用 Safari 打开当前网址后重试"],
+      };
+    }
+    return {
+      note: "Safari 需要通过系统分享菜单完成添加。",
+      steps: ["点击 Safari 底部工具栏的“分享”按钮", "向下找到“添加到主屏幕”", "确认名称后点击右上角“添加”"],
     };
   }
   if (environment.isAndroid) {
     return {
-      platform: "安卓手机 / 平板",
-      note: "推荐使用 Chrome、Edge 或系统浏览器安装。",
-      steps: ["点击下方“立即安装”", "在浏览器弹窗中确认安装", "安装后从桌面图标打开芭芭鸭"],
+      note: `${environment.browserLabel} 当前未提供自动弹窗，请通过浏览器菜单继续。`,
+      steps: ["打开浏览器右上角菜单", "选择“安装应用”或“添加到主屏幕”", "确认后从手机桌面打开芭芭鸭"],
     };
   }
   if (environment.isWindows) {
+    if (environment.isFirefox) {
+      return {
+        note: "Firefox 桌面版未提供标准网页应用安装入口，建议改用 Edge 或 Chrome。",
+        steps: ["用 Microsoft Edge 或 Chrome 打开当前网址", "点击地址栏右侧的安装图标", "在弹窗中点击“安装”"],
+      };
+    }
     return {
-      platform: "Windows 电脑",
-      note: "推荐使用 Chrome 或 Edge，可像普通应用一样固定到桌面和开始菜单。",
-      steps: ["点击下方“立即安装”", "在浏览器弹窗中点击“安装”", "从桌面或开始菜单打开芭芭鸭"],
+      note: `${environment.browserLabel} 当前未提供自动弹窗，请从地址栏或菜单继续。`,
+      steps: ["查看地址栏右侧的“安装应用”图标", "或打开浏览器菜单并进入“应用”", "点击“安装芭芭鸭”，再确认安装"],
     };
   }
   if (environment.isMac) {
+    if (environment.isSafari) {
+      return {
+        note: "Safari 需要通过文件菜单把网站添加到程序坞。",
+        steps: ["打开屏幕顶部的“文件”菜单", "选择“添加到程序坞”", "确认名称后点击“添加”"],
+      };
+    }
+    if (environment.isFirefox) {
+      return {
+        note: "Firefox 未提供标准桌面安装入口，建议改用 Safari、Edge 或 Chrome。",
+        steps: ["用 Safari、Edge 或 Chrome 打开当前网址", "再次点击页面里的“立即安装”", "在浏览器弹窗中确认安装"],
+      };
+    }
     return {
-      platform: "苹果 Mac",
-      note: "Chrome 可直接安装；Safari 可使用“文件 - 添加到程序坞”。",
-      steps: ["点击下方“立即安装”", "如果没有弹窗，请打开浏览器的文件或更多菜单", "选择“添加到程序坞”或“安装应用”"],
+      note: `${environment.browserLabel} 当前未提供自动弹窗，请从地址栏或菜单继续。`,
+      steps: ["查看地址栏右侧的“安装应用”图标", "或打开浏览器右上角菜单", "选择“安装芭芭鸭”并确认"],
     };
   }
   return {
-    platform: "当前设备",
-    note: "支持 PWA 的浏览器可将系统安装到桌面或主屏幕。",
-    steps: ["点击下方“立即安装”", "如果没有弹窗，请打开浏览器菜单", "选择“安装应用”或“添加到主屏幕”"],
+    note: `${environment.browserLabel} 当前未提供自动弹窗，请通过浏览器菜单继续。`,
+    steps: ["打开浏览器菜单", "选择“安装应用”或“添加到主屏幕”", "在系统弹窗中确认安装"],
   };
+}
+
+function installCapability(environment) {
+  if (environment.isStandalone) return { label: "已安装", tone: "success" };
+  if (environment.isFilePage) return { label: "需要网址打开", tone: "warning" };
+  if (deferredInstallPrompt) return { label: "可直接安装", tone: "success" };
+  if (environment.isIos || environment.isSafari) return { label: "需要系统确认", tone: "manual" };
+  if (environment.isFirefox && !environment.isAndroid) return { label: "建议更换浏览器", tone: "warning" };
+  return { label: "自动选择下一步", tone: "manual" };
 }
 
 function settingsInstallMarkup() {
   const environment = installEnvironment();
-  const guide = installGuide();
-  const directInstall = Boolean(deferredInstallPrompt);
-  const buttonLabel = environment.isStandalone ? "已经安装" : directInstall ? "立即安装" : environment.isIos ? "查看苹果安装步骤" : "检查安装方式";
+  const guide = installGuide(environment);
+  const capability = installCapability(environment);
+  const buttonLabel = environment.isStandalone ? "已经安装" : "立即安装";
+  const fallbackGuide = installGuideRevealed ? `<div class="install-fallback" aria-live="polite">
+    <div class="install-fallback-heading"><strong>请完成下面这一步</strong><span>${escapeHtml(guide.note)}</span></div>
+    <div class="install-guide-list">
+      ${guide.steps.map((step, index) => `<div><b>${index + 1}</b><span>${escapeHtml(step)}</span></div>`).join("")}
+    </div>
+  </div>` : `<p class="install-auto-note">点击后会自动识别当前系统和浏览器，并优先调起原生安装窗口。</p>`;
   return `<section class="panel account-profile-card install-app-card">
     <div class="panel-header">
       <div class="panel-title"><h2>安装芭芭鸭到设备</h2><p>安装后可从桌面或主屏幕直接打开，体验更接近独立应用</p></div>
@@ -1814,36 +1918,60 @@ function settingsInstallMarkup() {
     <div class="install-app-content">
       <div class="install-app-hero">
         <img src="./assets/babaya-app-icon-192.png" alt="芭芭鸭应用图标" />
-        <div><span>${escapeHtml(guide.platform)}</span><h3>${environment.isStandalone ? "芭芭鸭已安装" : "把芭芭鸭放到桌面"}</h3><p>${escapeHtml(guide.note)}</p></div>
+        <div><span>芭芭鸭桌面应用</span><h3>${environment.isStandalone ? "芭芭鸭已安装" : "一键安装到当前设备"}</h3><p>无需下载单独安装包，使用当前网址即可安装并保持自动更新。</p></div>
+      </div>
+      <div class="install-detection" aria-live="polite">
+        <div><small>自动识别结果</small><strong>${escapeHtml(environment.systemLabel)} · ${escapeHtml(environment.browserLabel)}</strong></div>
+        <em class="${escapeHtml(capability.tone)}">${escapeHtml(capability.label)}</em>
       </div>
       <button type="button" class="primary-button install-app-button" id="installSettingsButton" ${environment.isStandalone ? "disabled" : ""}>${icon("download")}<span>${buttonLabel}</span></button>
-      <div class="install-guide-list">
-        ${guide.steps.map((step, index) => `<div><b>${index + 1}</b><span>${escapeHtml(step)}</span></div>`).join("")}
-      </div>
+      ${fallbackGuide}
       <p class="install-security-note">安装不会复制机构数据；登录信息和业务数据仍由当前网站安全管理。</p>
     </div>
   </section>`;
 }
 
-async function requestAppInstall() {
+async function requestAppInstall(sourceButton) {
   const environment = installEnvironment();
+  const buttonLabel = sourceButton?.querySelector("span");
+  const resetButton = () => {
+    sourceButton?.classList.remove("is-detecting");
+    sourceButton?.removeAttribute("aria-busy");
+    if (buttonLabel) buttonLabel.textContent = "立即安装";
+  };
+  sourceButton?.classList.add("is-detecting");
+  sourceButton?.setAttribute("aria-busy", "true");
+  if (buttonLabel) buttonLabel.textContent = "正在识别...";
   if (environment.isStandalone) {
     showToast("芭芭鸭已经安装在当前设备上");
+    resetButton();
     return;
   }
   if (deferredInstallPrompt) {
     const promptEvent = deferredInstallPrompt;
     deferredInstallPrompt = null;
-    await promptEvent.prompt();
-    const choice = await promptEvent.userChoice;
-    showToast(choice.outcome === "accepted" ? "安装已开始" : "已取消安装");
-    if (activePage === "settings" && activeSettingsSection === "install") renderSettingsHub("install");
+    try {
+      await promptEvent.prompt();
+      const choice = await promptEvent.userChoice;
+      installGuideRevealed = choice.outcome !== "accepted";
+      showToast(choice.outcome === "accepted" ? "安装已开始" : "已取消安装，可按页面提示继续");
+      if (activePage === "settings" && activeSettingsSection === "install") renderSettingsHub("install");
+    } catch (error) {
+      installGuideRevealed = true;
+      activeSettingsSection = "install";
+      if (activePage === "settings") renderSettingsHub("install");
+      else await renderPage("settings");
+      showToast(`已识别：${environment.systemLabel} · ${environment.browserLabel}`);
+    }
+    resetButton();
     return;
   }
+  installGuideRevealed = true;
   activeSettingsSection = "install";
   if (activePage === "settings") renderSettingsHub("install");
   else await renderPage("settings");
-  showToast(environment.isIos ? "请按照页面步骤添加到主屏幕" : "请按照页面提示或浏览器菜单完成安装");
+  showToast(`已识别：${environment.systemLabel} · ${environment.browserLabel}`);
+  resetButton();
 }
 
 function settingsIndexMarkup(sections) {
@@ -2264,8 +2392,9 @@ function closeAttendance() {
 }
 
 document.addEventListener("click", async event => {
-  if (event.target.closest("#installAppShortcut, #installSettingsButton")) {
-    await requestAppInstall();
+  const installButton = event.target.closest("#installAppShortcut, #installSettingsButton");
+  if (installButton) {
+    await requestAppInstall(installButton);
     return;
   }
 
@@ -2564,6 +2693,7 @@ window.addEventListener("beforeinstallprompt", event => {
 
 window.addEventListener("appinstalled", () => {
   deferredInstallPrompt = null;
+  installGuideRevealed = false;
   document.querySelector("#installAppShortcut")?.classList.remove("install-ready");
   showToast("芭芭鸭已安装到当前设备");
   if (activePage === "settings" && activeSettingsSection === "install") renderSettingsHub("install");
@@ -3238,6 +3368,7 @@ async function boot() {
   } catch (error) {
     currentUser = null;
     showLogin();
+    if (error.code === "NETWORK_ERROR") showToast(error.message);
   }
 }
 

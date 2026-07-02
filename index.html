@@ -9,6 +9,11 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="芭芭鸭" />
     <title>芭芭鸭 · 语言艺术培训中心</title>
+    <script>
+      if (window.location.protocol === "file:") {
+        window.location.replace("https://shengdong-training-system.onrender.com/");
+      }
+    </script>
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" href="./assets/babaya-apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -141,8 +146,8 @@
             <button class="icon-button notification" aria-label="消息通知">
               <svg><use href="#icon-bell"></use></svg><span></span>
             </button>
-            <button class="icon-button install-shortcut" id="installAppShortcut" aria-label="安装到设备" title="安装到桌面或主屏幕">
-              <svg><use href="#icon-download"></use></svg>
+            <button class="secondary-button install-shortcut" id="installAppShortcut" aria-label="立即安装" title="安装到桌面或主屏幕">
+              <svg><use href="#icon-download"></use></svg><span>立即安装</span>
             </button>
             <button class="primary-button" id="quickAdd" aria-label="新增学员">
               <svg><use href="#icon-plus"></use></svg><span>新增学员</span>
