@@ -4,13 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="芭芭鸭语言艺术培训中心教培管理系统" />
-    <meta name="theme-color" content="#ff9f1c" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="芭芭鸭" />
     <title>芭芭鸭 · 语言艺术培训中心</title>
-    <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="./assets/babaya-apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -25,8 +19,15 @@
         <div class="login-logo-wrap">
           <img class="login-logo" src="./assets/babaya-logo-full.png" alt="芭芭鸭语言艺术培训中心" />
         </div>
-        <h1>登录芭芭鸭教培系统</h1>
-        <p>课程、学员、班级和老师，都在一个轻快好用的工作台里。</p>
+        <div class="brand login-brand">
+          <img class="brand-logo" src="./assets/babaya-duck-mark.png" alt="" aria-hidden="true" />
+          <div>
+            <strong>芭芭鸭</strong>
+            <small>语言艺术培训中心</small>
+          </div>
+        </div>
+        <h1>进入芭芭鸭教培系统</h1>
+        <p>把课程、学员、班级和老师都装进一个轻快好用的工作台。</p>
         <form id="loginForm" class="login-form">
           <label><span>手机号</span><input name="phone" autocomplete="username" required placeholder="例如：13800000001" /></label>
           <label><span>密码</span><input name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" /></label>
@@ -39,24 +40,9 @@
           <span>教师：13800000003 / teacher123</span>
           <span>招生：13800000004 / sales123</span>
           <span>财务：13800000005 / finance123</span>
-          <span>家长账号由后台绑定后使用手机号 / 000000 登录</span>
         </div>
       </div>
     </section>
-
-    <div class="parent-shell" id="parentShell" hidden>
-      <header class="parent-hero">
-        <div class="brand">
-          <img class="brand-logo" src="./assets/babaya-duck-mark.png" alt="" aria-hidden="true" />
-          <div>
-            <strong>芭芭鸭家长端</strong>
-            <small>课堂、课时、缴费一眼看清</small>
-          </div>
-        </div>
-        <button class="secondary-button" id="parentLogout">退出登录</button>
-      </header>
-      <main class="parent-main" id="parentContent"></main>
-    </div>
 
     <div class="app-shell" id="appShell" hidden>
       <aside class="sidebar">
@@ -81,18 +67,9 @@
           <button class="nav-item" data-page="schedule">
             <svg><use href="#icon-calendar"></use></svg><span>班级课表</span>
           </button>
-          <button class="nav-item" data-page="attendance">
-            <svg><use href="#icon-check"></use></svg><span>上课点名</span>
-          </button>
           <button class="nav-item" data-page="leads">
             <svg><use href="#icon-spark"></use></svg><span>招生跟进</span>
             <i>6</i>
-          </button>
-          <button class="nav-item" data-page="trials">
-            <svg><use href="#icon-calendar"></use></svg><span>试听课</span>
-          </button>
-          <button class="nav-item" data-page="payments">
-            <svg><use href="#icon-wallet"></use></svg><span>缴费续费</span>
           </button>
           <button class="nav-item" data-page="hours">
             <svg><use href="#icon-clock"></use></svg><span>课时管理</span>
@@ -102,18 +79,15 @@
           </button>
           <div class="nav-divider"></div>
           <button class="nav-item" data-page="settings">
-            <svg><use href="#icon-settings"></use></svg><span>设置</span>
+            <svg><use href="#icon-settings"></use></svg><span>系统设置</span>
           </button>
         </nav>
 
-        <div class="sidebar-card" id="leadGoalCard">
+        <div class="sidebar-card">
           <div class="sidebar-card-icon"><svg><use href="#icon-star"></use></svg></div>
-          <div class="sidebar-card-head">
-            <strong>本月招生目标</strong>
-            <button class="goal-edit-button" type="button" aria-label="编辑本月招生目标"><svg><use href="#icon-edit"></use></svg></button>
-          </div>
-          <div class="goal-line"><span id="leadGoalText">18 / 25 人</span><b id="leadGoalPercent">72%</b></div>
-          <div class="progress"><span id="leadGoalProgress" style="width: 72%"></span></div>
+          <strong>本月招生目标</strong>
+          <div class="goal-line"><span>18 / 25 人</span><b>72%</b></div>
+          <div class="progress"><span style="width: 72%"></span></div>
         </div>
 
         <div class="profile">
@@ -140,9 +114,6 @@
             </label>
             <button class="icon-button notification" aria-label="消息通知">
               <svg><use href="#icon-bell"></use></svg><span></span>
-            </button>
-            <button class="icon-button install-shortcut" id="installAppShortcut" aria-label="安装到设备" title="安装到桌面或主屏幕">
-              <svg><use href="#icon-download"></use></svg>
             </button>
             <button class="primary-button" id="quickAdd" aria-label="新增学员">
               <svg><use href="#icon-plus"></use></svg><span>新增学员</span>
@@ -208,34 +179,6 @@
       </div>
     </div>
 
-    <div class="modal-backdrop" id="parentBindBackdrop" hidden>
-      <div class="modal management-modal" role="dialog" aria-modal="true" aria-labelledby="parentBindTitle">
-        <div class="modal-header">
-          <div><small id="parentBindEyebrow">家长端账号</small><h2 id="parentBindTitle">绑定家长账号</h2></div>
-          <button class="icon-button" id="closeParentBind" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
-        </div>
-        <form id="parentBindForm">
-          <input type="hidden" name="student_id" />
-          <div class="form-grid">
-            <label><span>家长姓名</span><input name="name" required placeholder="例如：王女士" /></label>
-            <label><span>家长手机号</span><input name="phone" required type="tel" placeholder="用于登录家长端" /></label>
-            <label class="full"><span>与孩子关系</span><input name="relation" value="家长" placeholder="妈妈、爸爸、监护人等" /></label>
-            <div class="account-default-password full"><strong>初始密码：000000</strong><span>绑定后家长可用手机号和初始密码登录家长端预览页。</span></div>
-            <div class="parent-bind-code-card full" id="parentBindCodeBox" hidden>
-              <span>微信小程序绑定码</span>
-              <strong id="parentBindCode">--------</strong>
-              <small id="parentBindCodeTip">请让家长在小程序微信登录后输入此绑定码完成孩子绑定。</small>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button type="button" class="secondary-button" id="cancelParentBind">取消</button>
-            <button type="button" class="secondary-button" id="generateParentBindCode">生成微信绑定码</button>
-            <button type="submit" class="primary-button" id="saveParentBind">保存绑定</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
     <div class="modal-backdrop" id="rosterBackdrop" hidden>
       <div class="modal roster-modal" role="dialog" aria-modal="true" aria-labelledby="rosterTitle">
         <div class="modal-header">
@@ -243,85 +186,6 @@
           <button class="icon-button" id="closeRoster" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
         </div>
         <div id="rosterContent"></div>
-      </div>
-    </div>
-
-    <div class="modal-backdrop" id="attendanceBackdrop" hidden>
-      <div class="modal roster-modal" role="dialog" aria-modal="true" aria-labelledby="attendanceTitle">
-        <div class="modal-header">
-          <div><small id="attendanceEyebrow">上课点名</small><h2 id="attendanceTitle">班级点名</h2></div>
-          <button class="icon-button" id="closeAttendance" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
-        </div>
-        <form id="attendanceForm">
-          <input type="hidden" name="class_id" />
-          <input type="hidden" name="lesson_date" />
-          <div id="attendanceContent"></div>
-          <div class="modal-footer">
-            <button type="button" class="secondary-button" id="cancelAttendance">取消</button>
-            <button type="submit" class="primary-button" id="saveAttendance">保存点名并自动消课</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <div class="modal-backdrop" id="leadBackdrop" hidden>
-      <div class="modal management-modal" role="dialog" aria-modal="true" aria-labelledby="leadTitle">
-        <div class="modal-header">
-          <div><small id="leadEyebrow">招生跟进</small><h2 id="leadTitle">新增线索</h2></div>
-          <button class="icon-button" id="closeLead" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
-        </div>
-        <form id="leadForm">
-          <input type="hidden" name="id" />
-          <div class="form-grid">
-            <label><span>学员姓名</span><input name="name" required placeholder="请输入孩子姓名" /></label>
-            <label><span>年龄</span><input name="age" required type="number" min="3" max="18" placeholder="年龄" /></label>
-            <label><span>联系电话</span><input name="phone" required type="tel" placeholder="家长手机号" /></label>
-            <label><span>来源渠道</span><input name="source" placeholder="小红书、老带新、地推等" /></label>
-            <label><span>意向方向</span><input name="tag" placeholder="主持、朗诵、演讲等" /></label>
-            <label><span>跟进阶段</span>
-              <select name="stage">
-                <option>新线索</option><option>已联系</option><option>待试听</option>
-                <option>待报名</option><option>已报名</option><option>无效</option>
-              </select>
-            </label>
-            <label class="full"><span>下次跟进</span><input name="next_follow_at" placeholder="例如：周六 15:00 / 明天上午" /></label>
-            <label class="full"><span>跟进备注</span><textarea name="note" rows="3" placeholder="家长诉求、孩子特点、试听安排等"></textarea></label>
-          </div>
-          <div class="modal-footer">
-            <button type="button" class="secondary-button" id="cancelLead">取消</button>
-            <button type="submit" class="primary-button" id="saveLead">保存线索</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <div class="modal-backdrop" id="trialBackdrop" hidden>
-      <div class="modal management-modal" role="dialog" aria-modal="true" aria-labelledby="trialTitle">
-        <div class="modal-header">
-          <div><small id="trialEyebrow">试听课管理</small><h2 id="trialTitle">预约试听课</h2></div>
-          <button class="icon-button" id="closeTrial" aria-label="关闭"><svg><use href="#icon-close"></use></svg></button>
-        </div>
-        <form id="trialForm">
-          <input type="hidden" name="id" />
-          <input type="hidden" name="lead_id" />
-          <div class="form-grid">
-            <label><span>孩子姓名</span><input name="child_name" required placeholder="请输入孩子姓名" /></label>
-            <label><span>年龄</span><input name="age" required type="number" min="3" max="18" /></label>
-            <label><span>联系电话</span><input name="phone" required type="tel" placeholder="家长手机号" /></label>
-            <label><span>意向方向</span><input name="course_interest" required placeholder="主持、朗诵、演讲等" /></label>
-            <label><span>试听时间</span><input name="scheduled_at" required type="datetime-local" /></label>
-            <label><span>试听时长</span><input name="duration_minutes" required type="number" min="15" step="15" value="60" /></label>
-            <label><span>试听老师</span><select name="teacher_id" required></select></label>
-            <label><span>试听教室</span><select name="room_id" required></select></label>
-            <label><span>试听状态</span><select name="status"></select></label>
-            <label><span>试听结果</span><select name="result"></select></label>
-            <label class="full"><span>试听备注</span><textarea name="note" rows="3" placeholder="记录孩子表现、家长反馈、后续报名建议"></textarea></label>
-          </div>
-          <div class="modal-footer">
-            <button type="button" class="secondary-button" id="cancelTrial">取消</button>
-            <button type="submit" class="primary-button" id="saveTrial">保存试听课</button>
-          </div>
-        </form>
       </div>
     </div>
 
@@ -340,7 +204,6 @@
       <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
       <symbol id="icon-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M14 21h-4"/></symbol>
       <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
-      <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"/></symbol>
       <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
       <symbol id="icon-trend" viewBox="0 0 24 24"><path d="m3 17 6-6 4 4 8-9"/><path d="M15 6h6v6"/></symbol>
       <symbol id="icon-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.85.29 1.73.5 2.63.62A2 2 0 0 1 22 16.92Z"/></symbol>
